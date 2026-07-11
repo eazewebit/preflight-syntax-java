@@ -1,0 +1,46 @@
+plugins {
+    id 'java-library'
+}
+
+group = 'com.neel'
+version = '1.0.0'
+
+description = 'A pluggable Java library that validates the syntactic correctness of proposed source-code modifications before they are applied.'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    junitVersion = '5.12.2'
+    assertjVersion = '3.27.3'
+}
+
+dependencies {
+    testImplementation platform("org.junit:junit-bom:${junitVersion}")
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "org.assertj:assertj-core:${assertjVersion}"
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        showStandardStreams = false
+        exceptionFormat = 'full'
+    }
+}
+
+tasks.named('javadoc') {
+    options {
+        encoding = 'UTF-8'
+    }
+}
