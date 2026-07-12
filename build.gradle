@@ -19,7 +19,8 @@ repositories {
 
 ext {
     junitVersion = '5.12.2'
-    assertjVersion = '3.27.3'
+    assertjVersion = '3.27.7'
+    mockitoVersion = '5.16.1'
 }
 
 dependencies {
@@ -28,6 +29,9 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter-params'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testImplementation "org.assertj:assertj-core:${assertjVersion}"
+    testImplementation "org.mockito:mockito-core:${mockitoVersion}"
+    testImplementation "org.mockito:mockito-junit-jupiter:${mockitoVersion}"
+
 }
 
 tasks.named('test') {

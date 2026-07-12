@@ -18,6 +18,12 @@ public enum Language {
     /** JavaScript (files with a {@code .js}, {@code .mjs} or {@code .cjs} extension). */
     JAVASCRIPT("js", "mjs", "cjs"),
 
+    /** HTML (files with a {@code .html} or {@code .htm} extension). */
+    HTML("html", "htm"),
+
+    /** CSS (files with a {@code .css} extension). */
+    CSS("css"),
+
     /** TypeScript (files with a {@code .ts} extension). Placeholder for future support. */
     TYPESCRIPT("ts"),
 
