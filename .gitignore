@@ -1,19 +1,76 @@
+# ==========================
+# Java / Gradle
+# ==========================
+
+# Compiled class files
+*.class
+
+# Package files
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Build directories
+build/
+out/
+bin/
+
 # Gradle
 .gradle/
-build/
 !gradle/wrapper/gradle-wrapper.jar
 
-# IDE
+# ==========================
+# IDE Files
+# ==========================
+
+# IntelliJ IDEA
 .idea/
 *.iml
 *.ipr
 *.iws
-.vscode/
-.settings/
-.project
-.classpath
-*.swp
+*.iws
+out/
 
-# OS
+# Eclipse
+.classpath
+.project
+.settings/
+bin/
+
+# VS Code
+.vscode/
+
+# NetBeans
+nbproject/private/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+# ==========================
+# EazEditor
+# ==========================
+.eazeditor/
+
+# ==========================
+# OS Files
+# ==========================
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ==========================
+# Logs & Temp
+# ==========================
+*.log
+*.tmp
+*.swp
+*.bak
+
+# ==========================
+# Node (if present for tooling)
+# ==========================
+node_modules/
