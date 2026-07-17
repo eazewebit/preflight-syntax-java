@@ -24,6 +24,9 @@ public enum Language {
     /** CSS (files with a {@code .css} extension). */
     CSS("css"),
 
+    /** PHP (files with a {@code .php}, {@code .phtml}, or {@code .phps} extension). */
+    PHP("php", "phtml", "phps"),
+
     /** TypeScript (files with a {@code .ts} extension). Placeholder for future support. */
     TYPESCRIPT("ts"),
 

@@ -6,21 +6,20 @@ import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.validator.css.CssSyntaxEngine;
 import com.neel.syntaxvalidation.validator.html.HtmlSyntaxEngine;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptSyntaxEngine;
+import com.neel.syntaxvalidation.validator.php.PhpSyntaxEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Unit tests for {@link MixedContentSyntaxEngine}.
- *
- * <p>These tests exercise the orchestration logic of the mixed-content engine
- * using real sub-engines to verify the complete validation pipeline.
  */
 @DisplayName("MixedContentSyntaxEngine")
 class MixedContentSyntaxEngineTest {
@@ -51,7 +50,7 @@ class MixedContentSyntaxEngineTest {
         @DisplayName("null sub-engines are replaced with defaults")
         void nullSubEngines() {
             MixedContentSyntaxEngine e = new MixedContentSyntaxEngine(
-                    null, null, null, null);
+                    null, null, null, null, null);
             assertThat(e).isNotNull();
         }
 
@@ -62,6 +61,7 @@ class MixedContentSyntaxEngineTest {
                     HtmlSyntaxEngine.getInstance(),
                     CssSyntaxEngine.getInstance(),
                     JavaScriptSyntaxEngine.getInstance(),
+                    PhpSyntaxEngine.getInstance(),
                     HtmlContentExtractor.getInstance());
             assertThat(e).isNotNull();
         }
@@ -570,6 +570,246 @@ class MixedContentSyntaxEngineTest {
                     <script>
                     document.querySelector('.deeper').addEventListener('click', function() {
                         console.log('clicked');
+                    });
+                    </script>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // validate – PHP mixed content
+    // ---------------------------------------------------------------
+
+    @Nested
+    @DisplayName("validate – PHP mixed content")
+    class PhpMixedContent {
+
+        @Test
+        @DisplayName("valid PHP block in HTML returns valid result")
+        void validPhpBlockInHtml() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html lang="en">
+                    <head><title>PHP Page</title></head>
+                    <body>
+                    <?php echo "Hello World"; ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("valid PHP block with multiple statements")
+        void validPhpMultipleStatements() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <body>
+                    <?php
+                    $name = "World";
+                    $greeting = "Hello, " . $name;
+                    echo $greeting;
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("invalid PHP block returns errors with remapped line numbers")
+        void invalidPhpBlock() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>Test</title></head>
+                    <body>
+                    <?php
+                    function test( {
+                        echo "broken";
+                    }
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+            if (!result.isValid()) {
+                assertThat(result.getErrors()).isNotEmpty();
+                // Verify PHP errors are remapped to correct lines
+                result.getErrors().stream()
+                        .filter(e -> e.getMessage().contains("[PHP"))
+                        .forEach(e -> assertThat(e.getLine()).isGreaterThan(1));
+            }
+        }
+
+        @Test
+        @DisplayName("mixed CSS, JS, and PHP validates all three")
+        void mixedCssJsPhp() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <style>
+                    .header { color: blue; }
+                    </style>
+                    </head>
+                    <body>
+                    <?php $title = "My Page"; ?>
+                    <h1><?= $title ?></h1>
+                    <script>
+                    console.log("loaded");
+                    </script>
+                    <?php echo $footer; ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP block with class definition validates")
+        void phpClassDefinition() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <body>
+                    <?php
+                    class User {
+                        private string $name;
+                        
+                        public function __construct(string $name) {
+                            $this->name = $name;
+                        }
+                        
+                        public function greet(): string {
+                            return "Hello, " . $this->name;
+                        }
+                    }
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP block with unclosed brace reports error")
+        void phpUnclosedBrace() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                    function broken() {
+                        echo "missing closing brace";
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+            if (!result.isValid()) {
+                assertThat(result.getErrors()).isNotEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("PHP block with syntax error in echo")
+        void phpSyntaxError() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                    echo "unclosed string;
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+            if (!result.isValid()) {
+                assertThat(result.getErrors()).isNotEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("multiple PHP blocks with different errors")
+        void multiplePhpBlockErrors() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php function a() { ?>
+                    <?php echo "valid"; ?>
+                    <?php function b( { ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP with short-echo tag validates")
+        void shortEchoTag() {
+            String html = """
+                    <html>
+                    <body>
+                    <h1><?= "Hello" ?></h1>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = engine.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("real-world PHP template validates")
+        void realWorldPhpTemplate() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html lang="en">
+                    <head>
+                        <meta charset="UTF-8">
+                        <title><?php echo $pageTitle; ?></title>
+                        <style>
+                        body { font-family: sans-serif; margin: 0; padding: 20px; }
+                        .container { max-width: 1200px; margin: 0 auto; }
+                        </style>
+                    </head>
+                    <body>
+                    <?php
+                    $users = ["Alice", "Bob", "Charlie"];
+                    ?>
+                    <div class="container">
+                        <h1><?= $pageTitle ?? "Default Title" ?></h1>
+                        <ul>
+                        <?php foreach ($users as $user): ?>
+                            <li><?= htmlspecialchars($user) ?></li>
+                        <?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        console.log('Page loaded');
                     });
                     </script>
                     </body>

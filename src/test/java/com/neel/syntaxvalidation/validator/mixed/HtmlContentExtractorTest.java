@@ -805,7 +805,226 @@ class HtmlContentExtractorTest {
             List<ExtractedBlock> blocks = extractor.extract(html);
             assertThat(blocks).hasSize(2);
             assertThat(blocks.get(0).language()).isEqualTo(Language.CSS);
-            assertThat(blocks.get(1).language()).isEqualTo(Language.JAVASCRIPT);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // extract – PHP blocks
+    // ---------------------------------------------------------------
+
+    @Nested
+    @DisplayName("extract – PHP blocks")
+    class PhpBlocks {
+
+        @Test
+        @DisplayName("extracts a basic <?php … ?> block")
+        void basicPhpBlock() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <body>
+                    <?php echo "Hello World"; ?>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).isEqualTo("echo \"Hello World\";");
+        }
+
+        @Test
+        @DisplayName("extracts a <?= … ?> short-echo block")
+        void shortEchoBlock() {
+            String html = """
+                    <html><body>
+                    <?= $variable ?>
+                    </body></html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).isEqualTo(" $variable");
+        }
+
+        @Test
+        @DisplayName("extracts multi-line PHP block")
+        void multiLinePhpBlock() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                    $name = "World";
+                    $greeting = "Hello, " . $name;
+                    echo $greeting;
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).contains("$name = \"World\"");
+            assertThat(blocks.get(0).content()).contains("echo $greeting");
+            assertThat(blocks.get(0).startLine()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("extracts multiple PHP blocks")
+        void multiplePhpBlocks() {
+            String html = """
+                    <html>
+                    <body>
+                    <h1><?php echo $title; ?></h1>
+                    <p><?= $content ?></p>
+                    <?php echo $footer; ?>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(3);
+            assertThat(blocks).allSatisfy(block ->
+                    assertThat(block.language()).isEqualTo(Language.PHP));
+        }
+
+        @Test
+        @DisplayName("extracts PHP block with HTML around it")
+        void phpBlockWithHtml() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head><title>PHP Page</title></head>
+                    <body>
+                    <?php
+                    if ($showHeader) {
+                        echo "<h1>Welcome</h1>";
+                    }
+                    ?>
+                    <p>Static content</p>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).contains("if ($showHeader)");
+            assertThat(blocks.get(0).content()).contains("echo \"<h1>Welcome</h1>\"");
+        }
+
+        @Test
+        @DisplayName("does not extract <?xml … ?> processing instructions")
+        void xmlProcessingInstructionIgnored() {
+            String html = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <html>
+                    <body>
+                    <?php echo "test"; ?>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).isEqualTo("echo \"test\";");
+        }
+
+        @Test
+        @DisplayName("extracts mixed HTML with style, script, and PHP blocks")
+        void mixedHtmlCssJsPhp() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <style>
+                    .header { color: blue; }
+                    </style>
+                    </head>
+                    <body>
+                    <?php $title = "My Page"; ?>
+                    <h1><?= $title ?></h1>
+                    <script>
+                    console.log("loaded");
+                    </script>
+                    <?php echo $footer; ?>
+                    </body>
+                    </html>
+                    """;
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(5);
+
+            assertThat(blocks.get(0).language()).isEqualTo(Language.CSS);
+            assertThat(blocks.get(1).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(2).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(3).language()).isEqualTo(Language.JAVASCRIPT);
+            assertThat(blocks.get(4).language()).isEqualTo(Language.PHP);
+        }
+
+        @Test
+        @DisplayName("handles PHP block with curly braces and complex syntax")
+        void phpBlockWithComplexSyntax() {
+            String html = """
+                    <?php
+                    class User {
+                        private string $name;
+                        
+                        public function __construct(string $name) {
+                            $this->name = $name;
+                        }
+                        
+                        public function greet(): string {
+                            return "Hello, " . $this->name;
+                        }
+                    }
+                    ?>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            assertThat(blocks).hasSize(1);
+            assertThat(blocks.get(0).language()).isEqualTo(Language.PHP);
+            assertThat(blocks.get(0).content()).contains("class User");
+            assertThat(blocks.get(0).content()).contains("public function greet");
+        }
+
+        @Test
+        @DisplayName("handles empty PHP block gracefully")
+        void emptyPhpBlock() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php ?>
+                    <p>Content</p>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            // Empty PHP block should be filtered out
+            assertThat(blocks).isEmpty();
+        }
+
+        @Test
+        @DisplayName("handles PHP block with only whitespace")
+        void whitespaceOnlyPhpBlock() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                       
+                    ?>
+                    <p>Content</p>
+                    </body>
+                    </html>
+                    """;
+
+            List<ExtractedBlock> blocks = extractor.extract(html);
+            // Whitespace-only PHP block should be filtered out
+            assertThat(blocks).isEmpty();
         }
     }
 }

@@ -6,17 +6,18 @@ import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.validator.css.CssSyntaxEngine;
 import com.neel.syntaxvalidation.validator.html.HtmlSyntaxEngine;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptSyntaxEngine;
+import com.neel.syntaxvalidation.validator.php.PhpSyntaxEngine;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Syntax engine that performs comprehensive validation of HTML documents
- * containing embedded CSS ({@code &lt;style&gt;}) and JavaScript ({@code &lt;script&gt;})
- * content.
+ * Syntax engine that performs comprehensive validation of HTML/PHP documents
+ * containing embedded CSS ({@code &lt;style&gt;}), JavaScript ({@code &lt;script&gt;}),
+ * and PHP ({@code &lt;?php … ?&gt;}) content.
  *
- * <p>This engine orchestrates validation across three dimensions:
+ * <p>This engine orchestrates validation across four dimensions:
  * <ol>
  *   <li><b>HTML structure</b> &mdash; delegates to {@link HtmlSyntaxEngine} for
  *       structural HTML validation (optionally via the external vnu.jar).</li>
@@ -26,6 +27,9 @@ import java.util.stream.Collectors;
  *   <li><b>Embedded JavaScript</b> &mdash; uses {@link HtmlContentExtractor} to
  *       locate {@code &lt;script&gt;} blocks, then validates each block via
  *       {@link JavaScriptSyntaxEngine}.</li>
+ *   <li><b>Embedded PHP</b> &mdash; uses {@link HtmlContentExtractor} to
+ *       locate {@code &lt;?php … ?&gt;} blocks, then validates each block via
+ *       {@link PhpSyntaxEngine}.</li>
  * </ol>
  *
  * <p>Error line numbers from embedded content are remapped to the correct
@@ -47,6 +51,7 @@ public final class MixedContentSyntaxEngine {
     private final HtmlSyntaxEngine htmlEngine;
     private final CssSyntaxEngine cssEngine;
     private final JavaScriptSyntaxEngine jsEngine;
+    private final PhpSyntaxEngine phpEngine;
     private final HtmlContentExtractor extractor;
 
     /**
@@ -56,6 +61,7 @@ public final class MixedContentSyntaxEngine {
         this(HtmlSyntaxEngine.getInstance(),
              CssSyntaxEngine.getInstance(),
              JavaScriptSyntaxEngine.getInstance(),
+             PhpSyntaxEngine.getInstance(),
              HtmlContentExtractor.getInstance());
     }
 
@@ -65,36 +71,41 @@ public final class MixedContentSyntaxEngine {
      * @param htmlEngine the engine for HTML structural validation.
      * @param cssEngine  the engine for CSS syntax validation.
      * @param jsEngine   the engine for JavaScript syntax validation.
+     * @param phpEngine  the engine for PHP syntax validation.
      * @param extractor  the extractor for embedded content blocks.
      * @throws NullPointerException if any argument is {@code null}.
      */
     public MixedContentSyntaxEngine(HtmlSyntaxEngine htmlEngine,
                                      CssSyntaxEngine cssEngine,
                                      JavaScriptSyntaxEngine jsEngine,
+                                     PhpSyntaxEngine phpEngine,
                                      HtmlContentExtractor extractor) {
         this.htmlEngine = htmlEngine != null ? htmlEngine : HtmlSyntaxEngine.getInstance();
         this.cssEngine = cssEngine != null ? cssEngine : CssSyntaxEngine.getInstance();
         this.jsEngine = jsEngine != null ? jsEngine : JavaScriptSyntaxEngine.getInstance();
+        this.phpEngine = phpEngine != null ? phpEngine : PhpSyntaxEngine.getInstance();
         this.extractor = extractor != null ? extractor : HtmlContentExtractor.getInstance();
     }
 
     /**
-     * Validates the given HTML source, including any embedded CSS and
-     * JavaScript.
+     * Validates the given HTML/PHP source, including any embedded CSS,
+     * JavaScript, and PHP.
      *
      * <p>The validation proceeds in stages:
      * <ol>
-     *   <li>Extract embedded {@code &lt;style&gt;} and {@code &lt;script&gt;} blocks.</li>
+     *   <li>Extract embedded {@code &lt;style&gt;}, {@code &lt;script&gt;}, and
+     *       {@code &lt;?php … ?&gt;} blocks.</li>
      *   <li>Validate the full HTML structure.</li>
      *   <li>Validate each extracted CSS block.</li>
      *   <li>Validate each extracted JavaScript block.</li>
+     *   <li>Validate each extracted PHP block.</li>
      *   <li>Merge all errors, remapping embedded-content line numbers to the
      *       original HTML positions.</li>
      * </ol>
      *
-     * @param htmlSource the full HTML source code to validate.
+     * @param htmlSource the full HTML/PHP source code to validate.
      * @return a {@link ValidationResult} containing all errors found across
-     *         HTML, CSS, and JavaScript validation.
+     *         HTML, CSS, JavaScript, and PHP validation.
      * @throws NullPointerException if {@code htmlSource} is {@code null}.
      */
     public ValidationResult validate(String htmlSource) {
@@ -130,8 +141,19 @@ public final class MixedContentSyntaxEngine {
             }
         }
 
-        // Stage 5: Merge all errors
-        return mergeResults(htmlResult, cssResults, jsResults);
+        // Stage 5: Validate embedded PHP blocks
+        List<ValidationResult> phpResults = new ArrayList<>();
+        for (ExtractedBlock block : blocks) {
+            if (block.language() == Language.PHP && !block.isEmpty()) {
+                ValidationResult phpResult = phpEngine.validate(block.content());
+                if (!phpResult.isValid()) {
+                    phpResults.add(remapLineNumbers(phpResult, block));
+                }
+            }
+        }
+
+        // Stage 6: Merge all errors
+        return mergeResults(htmlResult, cssResults, jsResults, phpResults);
     }
 
     /**
@@ -167,28 +189,50 @@ public final class MixedContentSyntaxEngine {
      * @return a message prefixed with the language context.
      */
     private String prependLanguageContext(ValidationError error, ExtractedBlock block) {
-        String langLabel = block.language() == Language.CSS ? "CSS" : "JavaScript";
-        return "[" + langLabel + " in <" + (block.language() == Language.CSS ? "style" : "script") + ">] "
+        String langLabel;
+        String tagName;
+        switch (block.language()) {
+            case CSS:
+                langLabel = "CSS";
+                tagName = "style";
+                break;
+            case JAVASCRIPT:
+                langLabel = "JavaScript";
+                tagName = "script";
+                break;
+            case PHP:
+                langLabel = "PHP";
+                tagName = "php";
+                break;
+            default:
+                langLabel = block.language().toString();
+                tagName = "unknown";
+                break;
+        }
+        return "[" + langLabel + " in <" + tagName + ">] "
                 + error.getMessage();
     }
 
     /**
-     * Merges HTML, CSS, and JavaScript validation results into a single
+     * Merges HTML, CSS, JavaScript, and PHP validation results into a single
      * result.
      *
      * @param htmlResult  the HTML validation result.
      * @param cssResults  the CSS validation results (only invalid ones).
      * @param jsResults   the JavaScript validation results (only invalid ones).
+     * @param phpResults  the PHP validation results (only invalid ones).
      * @return a combined {@link ValidationResult}.
      */
     private ValidationResult mergeResults(ValidationResult htmlResult,
                                            List<ValidationResult> cssResults,
-                                           List<ValidationResult> jsResults) {
-        boolean allValid = htmlResult.isValid() && cssResults.isEmpty() && jsResults.isEmpty();
+                                           List<ValidationResult> jsResults,
+                                           List<ValidationResult> phpResults) {
+        boolean allValid = htmlResult.isValid() && cssResults.isEmpty()
+                && jsResults.isEmpty() && phpResults.isEmpty();
 
         if (allValid) {
             return ValidationResult.valid(
-                    "Mixed HTML content (with embedded CSS and JavaScript) is syntactically valid.");
+                    "Mixed HTML content (with embedded CSS, JavaScript, and PHP) is syntactically valid.");
         }
 
         List<ValidationError> allErrors = new ArrayList<>();
@@ -208,6 +252,11 @@ public final class MixedContentSyntaxEngine {
             allErrors.addAll(jsResult.getErrors());
         }
 
+        // Add PHP errors
+        for (ValidationResult phpResult : phpResults) {
+            allErrors.addAll(phpResult.getErrors());
+        }
+
         // Sort by line number, then by column
         allErrors.sort((a, b) -> {
             int lineCmp = Integer.compare(a.getLine(), b.getLine());
@@ -215,7 +264,7 @@ public final class MixedContentSyntaxEngine {
         });
 
         String message = buildSummaryMessage(allErrors.size(), cssResults.size(), jsResults.size(),
-                                              !htmlResult.isValid());
+                                              phpResults.size(), !htmlResult.isValid());
 
         return ValidationResult.invalid(message, allErrors);
     }
@@ -224,7 +273,7 @@ public final class MixedContentSyntaxEngine {
      * Builds a human-readable summary message for the merged result.
      */
     private String buildSummaryMessage(int totalErrors, int cssBlockCount, int jsBlockCount,
-                                        boolean hasHtmlErrors) {
+                                        int phpBlockCount, boolean hasHtmlErrors) {
         StringBuilder sb = new StringBuilder();
         sb.append("Mixed content validation found ").append(totalErrors).append(" error(s)");
 
@@ -237,6 +286,9 @@ public final class MixedContentSyntaxEngine {
         }
         if (jsBlockCount > 0) {
             parts.add(jsBlockCount + " JavaScript block(s)");
+        }
+        if (phpBlockCount > 0) {
+            parts.add(phpBlockCount + " PHP block(s)");
         }
 
         if (!parts.isEmpty()) {

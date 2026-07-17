@@ -5,19 +5,25 @@ import com.neel.syntaxvalidation.model.Language;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Extracts embedded {@code <style>} and {@code <script>} content blocks from
- * an HTML document, preserving the original line numbers for error remapping.
+ * Extracts embedded {@code <style>}, {@code <script>}, and
+ * {@code <?php … ?>} content blocks from an HTML/PHP document, preserving
+ * the original line numbers for error remapping.
  *
  * <p>This extractor uses a regex-based approach to locate {@code <style>} and
  * {@code <script>} opening/closing tags and captures the content between them.
  * It is deliberately lenient with tag attributes (e.g. {@code type="text/css"},
  * {@code lang="javascript"}, {@code defer}, etc.) and focuses on extracting
  * the raw embedded content with accurate position tracking.
+ *
+ * <h2>PHP block extraction</h2>
+ * <p>In addition to CSS and JavaScript, this extractor also locates
+ * {@code <?php … ?>} and {@code <?= … ?>} blocks in mixed PHP/HTML
+ * templates.  The raw PHP source is returned as a {@link Language#PHP}
+ * block so that the PHP syntax engine can validate it.
  *
  * <h2>Line number mapping</h2>
  * <p>Each {@link ExtractedBlock} records the 1-based line number where the
@@ -37,7 +43,9 @@ import java.util.regex.Pattern;
  *   <li>Case-insensitive tag matching (e.g. {@code <STYLE>} or
  *       {@code <Script>});</li>
  *   <li>Tags with various attributes like {@code type}, {@code src},
- *       {@code charset}, {@code nonce}, {@code crossorigin}, etc.</li>
+ *       {@code charset}, {@code nonce}, {@code crossorigin}, etc.;</li>
+ *   <li>PHP open/close tags: {@code <?php … ?>}, {@code <?= … ?>},
+ *       {@code <? … ?>} (short-open only when enabled).</li>
  * </ul>
  *
  * <p><b>Thread-safety.</b> This class is stateless and safe for concurrent use.
@@ -46,51 +54,58 @@ public final class HtmlContentExtractor {
 
     private static final HtmlContentExtractor INSTANCE = new HtmlContentExtractor();
 
-    /**
-     * Matches an opening {@code <style ...>} tag. Group 1 captures the full
-     * opening tag (from {@code <} to {@code >}).  The match is
-     * case-insensitive.
-     */
+    // ----------------------------------------------------------------
+    //  CSS / JavaScript tag patterns
+    // ----------------------------------------------------------------
+
+    /** Matches an opening {@code <style ...>} tag. */
     private static final Pattern STYLE_OPEN_PATTERN = Pattern.compile(
             "<style(?:\\s[^>]*)?>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
     );
 
-    /**
-     * Matches an opening {@code <script ...>} tag.
-     */
+    /** Matches an opening {@code <script ...>} tag. */
     private static final Pattern SCRIPT_OPEN_PATTERN = Pattern.compile(
             "<script(?:\\s[^>]*)?>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL
     );
 
-    /**
-     * Matches a closing {@code </style>} tag.
-     */
+    /** Matches a closing {@code </style>} tag. */
     private static final Pattern STYLE_CLOSE_PATTERN = Pattern.compile(
             "</style\\s*>",
             Pattern.CASE_INSENSITIVE
     );
 
-    /**
-     * Matches a closing {@code </script>} tag.
-     */
+    /** Matches a closing {@code </script>} tag. */
     private static final Pattern SCRIPT_CLOSE_PATTERN = Pattern.compile(
             "</script\\s*>",
             Pattern.CASE_INSENSITIVE
     );
 
+    // ----------------------------------------------------------------
+    //  PHP patterns
+    // ----------------------------------------------------------------
+
     /**
-     * Combined pattern to find opening tags for both style and script
-     * elements.  Group 1 = tag name ("style" or "script").
+     * Matches the opening of a PHP block: {@code <?php }, {@code <?= }, or
+     * {@code <? } (short open tag).
+     *
+     * <p>Note: we intentionally do NOT match {@code <?xml} because that is
+     * an XML processing instruction, not a PHP block.
      */
-    private static final Pattern BLOCK_OPEN_PATTERN = Pattern.compile(
-            "<(style|script)(?:\\s[^>]*)?>",
-            Pattern.CASE_INSENSITIVE | Pattern.DOTALL
+    private static final Pattern PHP_OPEN_PATTERN = Pattern.compile(
+            "<\\?php\\s|<\\?=|<\\?(?![xX][mM][lL])",
+            Pattern.DOTALL
     );
 
-    private HtmlContentExtractor() {
-    }
+    /** Matches a PHP closing tag {@code ?>}. */
+    private static final Pattern PHP_CLOSE_PATTERN = Pattern.compile(
+            "\\?>"
+    );
+
+    // ----------------------------------------------------------------
+
+    private HtmlContentExtractor() { }
 
     /**
      * Returns the singleton extractor instance.
@@ -102,14 +117,14 @@ public final class HtmlContentExtractor {
     }
 
     /**
-     * Extracts all embedded {@code <style>} and {@code <script>} blocks from
-     * the given HTML source.
+     * Extracts all embedded {@code <style>}, {@code <script>}, and
+     * {@code <?php … ?>} blocks from the given HTML/PHP source.
      *
      * <p>The returned list is ordered by the position of each block in the
      * original document (top to bottom).  Only blocks with non-empty content
      * are included.  If no embedded blocks are found, an empty list is returned.
      *
-     * @param htmlSource the full HTML source code.
+     * @param htmlSource the full HTML/PHP source code.
      * @return an immutable, ordered list of extracted content blocks.
      * @throws NullPointerException if {@code htmlSource} is {@code null}.
      */
@@ -123,62 +138,71 @@ public final class HtmlContentExtractor {
 
         List<ExtractedBlock> blocks = new ArrayList<>();
 
-        // Extract style blocks
-        extractBlocks(htmlSource, "style", Language.CSS, blocks);
+        // Extract <style> blocks
+        extractTagBlocks(htmlSource, "style", Language.CSS, blocks);
 
-        // Extract script blocks
-        extractBlocks(htmlSource, "script", Language.JAVASCRIPT, blocks);
+        // Extract <script> blocks
+        extractTagBlocks(htmlSource, "script", Language.JAVASCRIPT, blocks);
 
-        // Sort by start line
+        // Extract <?php … ?> blocks
+        extractPhpBlocks(htmlSource, blocks);
+
+        // Sort by start line (document order)
         blocks.sort((a, b) -> Integer.compare(a.startLine(), b.startLine()));
 
         return Collections.unmodifiableList(blocks);
     }
 
+    // ----------------------------------------------------------------
+    //  CSS / JavaScript extraction
+    // ----------------------------------------------------------------
+
     /**
-     * Extracts all blocks of a specific tag type from the HTML source.
+     * Extracts all blocks of a specific HTML tag type from the source.
      *
      * @param htmlSource the full HTML source.
-     * @param tagName    the tag name to search for ("style" or "script").
-     * @param language   the language to associate with extracted content.
+     * @param tagName    the tag name to search for ({@code "style"} or
+     *                   {@code "script"}).
+     * @param language   the language of the content inside the tag.
      * @param blocks     the accumulator list for extracted blocks.
      */
-    private void extractBlocks(String htmlSource, String tagName,
-                                Language language, List<ExtractedBlock> blocks) {
-        Pattern openPattern = "style".equals(tagName) ? STYLE_OPEN_PATTERN : SCRIPT_OPEN_PATTERN;
-        Pattern closePattern = "style".equals(tagName) ? STYLE_CLOSE_PATTERN : SCRIPT_CLOSE_PATTERN;
+    private void extractTagBlocks(String htmlSource, String tagName,
+                                  Language language, List<ExtractedBlock> blocks) {
+        Pattern openPattern = "style".equals(tagName)
+                ? STYLE_OPEN_PATTERN : SCRIPT_OPEN_PATTERN;
+        Pattern closePattern = "style".equals(tagName)
+                ? STYLE_CLOSE_PATTERN : SCRIPT_CLOSE_PATTERN;
 
         Matcher openMatcher = openPattern.matcher(htmlSource);
 
         while (openMatcher.find()) {
             int openTagStart = openMatcher.start();
-            int openTagEnd = openMatcher.end();
+            int openTagEnd   = openMatcher.end();
 
             // Find the matching closing tag after the opening tag
             Matcher closeMatcher = closePattern.matcher(htmlSource);
-            boolean foundClose = false;
 
             while (closeMatcher.find(openTagEnd)) {
                 int closeTagStart = closeMatcher.start();
-                int closeTagEnd = closeMatcher.end();
+                int closeTagEnd   = closeMatcher.end();
 
                 // Extract content between opening and closing tags
                 String content = htmlSource.substring(openTagEnd, closeTagStart);
 
                 // Calculate line numbers
                 int startLine = lineNumberAt(htmlSource, openTagStart);
-                // contentStartLine is the line where actual content begins.
                 // If the character right after the opening tag is a newline,
                 // the content starts on the next line.
                 int contentStartLine = lineNumberAt(htmlSource, openTagEnd);
-                if (openTagEnd < htmlSource.length() && htmlSource.charAt(openTagEnd) == '\n') {
+                if (openTagEnd < htmlSource.length()
+                        && htmlSource.charAt(openTagEnd) == '\n') {
                     contentStartLine++;
                 }
                 int contentStartColumn = columnNumberAt(htmlSource, openTagEnd);
                 int contentEndLine = lineNumberAt(htmlSource, closeTagStart);
 
-                // Only include non-empty blocks (skip blocks with only whitespace
-                // or legacy HTML comment wrappers)
+                // Only include non-empty blocks (skip blocks with only
+                // whitespace or legacy HTML comment wrappers)
                 String strippedContent = stripLegacyHtmlCommentWrapping(content);
                 if (!strippedContent.isBlank()) {
                     blocks.add(new ExtractedBlock(
@@ -191,14 +215,70 @@ public final class HtmlContentExtractor {
                     ));
                 }
 
-                foundClose = true;
-                break;
+                break;  // only the first matching close tag
             }
-
-            // If no closing tag found, skip this opening tag — it may be
-            // malformed HTML that will be caught by the HTML validator.
         }
     }
+
+    // ----------------------------------------------------------------
+    //  PHP extraction
+    // ----------------------------------------------------------------
+
+    /**
+     * Extracts all {@code <?php … ?>} and {@code <?= … ?>} blocks from the
+     * given source.  Unlike HTML tag extraction, PHP blocks do not have
+     * element names; they are identified solely by the opening
+     * {@code <?php } / {@code <?= } / {@code <? } sequences and the closing
+     * {@code ?>} sequence.
+     *
+     * <p>Blocks that start with {@code <?xml} are deliberately ignored because
+     * they are XML processing instructions, not PHP code.
+     *
+     * @param htmlSource the full source text.
+     * @param blocks     the accumulator list for extracted blocks.
+     */
+    private void extractPhpBlocks(String htmlSource, List<ExtractedBlock> blocks) {
+        Matcher openMatcher = PHP_OPEN_PATTERN.matcher(htmlSource);
+
+        while (openMatcher.find()) {
+            int openTagStart = openMatcher.start();
+            int openTagEnd   = openMatcher.end();
+
+            // Find the matching closing ?> tag after the opening tag
+            Matcher closeMatcher = PHP_CLOSE_PATTERN.matcher(htmlSource);
+
+            while (closeMatcher.find(openTagEnd)) {
+                int closeTagStart = closeMatcher.start();
+
+                // Extract content between opening and closing tags
+                String content = htmlSource.substring(openTagEnd, closeTagStart);
+
+                // Calculate line numbers
+                int startLine = lineNumberAt(htmlSource, openTagStart);
+                int contentStartLine = lineNumberAt(htmlSource, openTagEnd);
+                int contentStartColumn = columnNumberAt(htmlSource, openTagEnd);
+                int contentEndLine = lineNumberAt(htmlSource, closeTagStart);
+
+                // Only include non-empty blocks
+                if (!content.isBlank()) {
+                    blocks.add(new ExtractedBlock(
+                            Language.PHP,
+                            content.stripTrailing(),
+                            startLine,
+                            contentStartLine,
+                            contentStartColumn,
+                            contentEndLine
+                    ));
+                }
+
+                break;  // only the first matching close tag
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    //  Helpers
+    // ----------------------------------------------------------------
 
     /**
      * Strips legacy HTML comment wrappers used inside {@code <script>} blocks.
@@ -208,7 +288,7 @@ public final class HtmlContentExtractor {
      * <pre>{@code
      * <script>
      * <!--
-     *   var x = 1;
+     *   function hello() { alert("Hello"); }
      * //-->
      * </script>
      * }</pre>

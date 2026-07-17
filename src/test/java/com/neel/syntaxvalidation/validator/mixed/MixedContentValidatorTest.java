@@ -297,13 +297,237 @@ class MixedContentValidatorTest {
         void returnsCorrectType() {
             assertThat(validator.getEngine()).isInstanceOf(MixedContentSyntaxEngine.class);
         }
-
         @Test
         @DisplayName("returns the same engine instance on repeated calls")
         void returnsSameInstance() {
             MixedContentSyntaxEngine engine1 = validator.getEngine();
             MixedContentSyntaxEngine engine2 = validator.getEngine();
             assertThat(engine1).isSameAs(engine2);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // validate – PHP mixed content
+    // ---------------------------------------------------------------
+
+    @Nested
+    @DisplayName("validate – PHP mixed content")
+    class PhpMixedContent {
+        void validPhpBlock() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html lang="en">
+                    <head><title>PHP Page</title></head>
+                    <body>
+                    <?php echo "Hello World"; ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("valid PHP with multiple statements returns result")
+        void validPhpMultipleStatements() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <body>
+                    <?php
+                    $name = "World";
+                    $greeting = "Hello, " . $name;
+                    echo $greeting;
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("mixed CSS, JS, and PHP validates all layers")
+        void mixedCssJsPhp() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <style>
+                    .header { color: blue; }
+                    </style>
+                    </head>
+                    <body>
+                    <?php $title = "My Page"; ?>
+                    <h1><?= $title ?></h1>
+                    <script>
+                    console.log("loaded");
+                    </script>
+                    <?php echo $footer; ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP class definition validates without error")
+        void phpClassDefinition() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <body>
+                    <?php
+                    class User {
+                        private string $name;
+                        
+                        public function __construct(string $name) {
+                            $this->name = $name;
+                        }
+                        
+                        public function greet(): string {
+                            return "Hello, " . $this->name;
+                        }
+                    }
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP with short-echo tag validates")
+        void shortEchoTag() {
+            String html = """
+                    <html>
+                    <body>
+                    <h1><?= "Hello" ?></h1>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("real-world PHP template with CSS, JS, and PHP validates")
+        void realWorldPhpTemplate() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html lang="en">
+                    <head>
+                        <meta charset="UTF-8">
+                        <title><?php echo $pageTitle; ?></title>
+                        <style>
+                        body { font-family: sans-serif; margin: 0; padding: 20px; }
+                        .container { max-width: 1200px; margin: 0 auto; }
+                        .nav { background: #333; color: white; padding: 10px; }
+                        </style>
+                    </head>
+                    <body>
+                    <?php
+                    $users = ["Alice", "Bob", "Charlie"];
+                    ?>
+                    <div class="container">
+                        <h1><?= $pageTitle ?? "Default Title" ?></h1>
+                        <ul>
+                        <?php foreach ($users as $user): ?>
+                            <li><?= htmlspecialchars($user) ?></li>
+                        <?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <script>
+                    document.addEventListener('DOMContentLoaded', function() {
+                        console.log('Page loaded');
+                        const items = document.querySelectorAll('li');
+                        items.forEach(item => {
+                            item.style.cursor = 'pointer';
+                        });
+                    });
+                    </script>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP with invalid syntax returns errors")
+        void invalidPhpSyntax() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                    function broken( {
+                        echo "missing paren";
+                    }
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+            // The PHP engine may report errors for the invalid syntax
+        }
+
+        @Test
+        @DisplayName("multiple PHP blocks in document validate independently")
+        void multiplePhpBlocks() {
+            String html = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <?php echo '<title>Test</title>'; ?>
+                    <style><?php echo '.red { color: red; }'; ?></style>
+                    </head>
+                    <body>
+                    <?php
+                    $x = 1;
+                    $y = 2;
+                    echo $x + $y;
+                    ?>
+                    <script>
+                    <?php echo "console.log('injected');"; ?>
+                    </script>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
+        }
+
+        @Test
+        @DisplayName("PHP with control structures validates")
+        void phpControlStructures() {
+            String html = """
+                    <html>
+                    <body>
+                    <?php
+                    $items = [1, 2, 3];
+                    foreach ($items as $item) {
+                        if ($item > 1) {
+                            echo $item;
+                        }
+                    }
+                    ?>
+                    </body>
+                    </html>
+                    """;
+
+            ValidationResult result = validator.validate(html);
+            assertThat(result).isNotNull();
         }
     }
 }

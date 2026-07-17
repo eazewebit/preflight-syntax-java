@@ -5,13 +5,13 @@ import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
 
 import java.util.Optional;
-
 /**
  * A {@link LanguageValidator} that performs comprehensive syntax validation of
- * HTML documents containing embedded CSS ({@code &lt;style&gt;}) and JavaScript
- * ({@code &lt;script&gt;}) content.
+ * HTML/PHP documents containing embedded CSS ({@code &lt;style&gt;}),
+ * JavaScript ({@code &lt;script&gt;}), and PHP ({@code &lt;?php … ?&gt;})
+ * content.
  *
- * <p>This validator orchestrates three sub-validators:
+ * <p>This validator orchestrates four sub-validators:
  * <ol>
  *   <li><b>HTML structure</b> &mdash; validates the HTML document structure
  *       using the Nu Html Checker (vnu.jar) when available, with a pure-Java
@@ -20,6 +20,9 @@ import java.util.Optional;
  *       tags and validates it using the CSS syntax engine.</li>
  *   <li><b>Embedded JavaScript</b> &mdash; extracts content from
  *       {@code &lt;script&gt;} tags and validates it using the JavaScript
+ *       syntax engine.</li>
+ *   <li><b>Embedded PHP</b> &mdash; extracts content from
+ *       {@code &lt;?php … ?&gt;} blocks and validates it using the PHP
  *       syntax engine.</li>
  * </ol>
  *
