@@ -33,7 +33,7 @@ public enum Language {
     /** Python (files with a {@code .py} extension). Placeholder for future support. */
     PYTHON("py"),
 
-    /** Java (files with a {@code .java} extension). Placeholder for future support. */
+    /** Java (files with a {@code .java} extension). Validated by the modular {@code JavaValidator}. */
     JAVA("java");
 
     private final String[] extensions;

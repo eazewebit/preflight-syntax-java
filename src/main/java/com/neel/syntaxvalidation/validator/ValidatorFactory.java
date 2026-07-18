@@ -3,6 +3,7 @@ package com.neel.syntaxvalidation.validator;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.validator.css.CssValidator;
 import com.neel.syntaxvalidation.validator.html.HtmlValidator;
+import com.neel.syntaxvalidation.validator.java.JavaValidator;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
 import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import com.neel.syntaxvalidation.validator.php.PhpValidator;
@@ -48,7 +49,7 @@ public final class ValidatorFactory {
      * Creates a new factory, optionally registering built-in validators.
      *
      * @param registerBuiltins {@code true} to register the built-in
-     *                         JavaScript, HTML, CSS, and PHP validators;
+     *                         JavaScript, HTML, CSS, PHP, and Java validators;
      *                         {@code false} for an empty factory.
      */
     public ValidatorFactory(boolean registerBuiltins) {
@@ -57,6 +58,7 @@ public final class ValidatorFactory {
             validators.put(Language.HTML, new HtmlValidator());
             validators.put(Language.CSS, new CssValidator());
             validators.put(Language.PHP, new PhpValidator());
+            validators.put(Language.JAVA, new JavaValidator());
         }
     }
 

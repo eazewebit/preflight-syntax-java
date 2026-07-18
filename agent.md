@@ -1,7 +1,7 @@
 # Agent Guide — Syntax Validation Library (Java)
 
 > **Project root:** `F:\code-helper-mcp-library-java`
-> **Language:** Java 21+ | **Build:** Gradle (Groovy DSL) | **Testing:** JUnit 5 + AssertJ
+> **Language:** Java 25 | **Build:** Gradle (Groovy DSL) | **Testing:** JUnit 5 + AssertJ
 
 ---
 
@@ -11,7 +11,7 @@ A **pluggable Java library** that validates the syntactic correctness of propose
 
 The library takes an original source file plus a set of proposed modifications (line-range replacements), produces a modified snapshot in memory, then validates the syntax of the result. External tool invocations (`node --check`, `python -c compile(...)`, `php -l`, `stylelint`, `vnu`) are optional—**every language also has a zero-dependency, pure-Java fallback engine** for fast structural validation.
 
-### Supported Languages (5)
+### Supported Languages (7)
 
 | Language | Enum Value | Extensions | Validator Class | Pure-Java Engine |
 |---|---|---|---|---|
@@ -19,9 +19,10 @@ The library takes an original source file plus a set of proposed modifications (
 | CSS | `CSS` | `.css` | `CssValidator` | `CssSyntaxEngine` |
 | HTML | `HTML` | `.html`, `.htm`, `.xhtml` | `HtmlValidator` | `HtmlSyntaxEngine` |
 | PHP | `PHP` | `.php`, `.phtml`, `.phps` | `PhpValidator` | `PhpSyntaxEngine` |
-| Mixed Content | `MIXED` | `.html`, `.htm`, `.php` (when mixed content detected) | `MixedContentValidator` | `MixedContentSyntaxEngine` |
-
-### Core Design Principles
+| Java | `JAVA` | `.java` | `JavaValidator` | `JavaLexer` + `JavaSyntaxEngine` + 3 checkers |
+| TypeScript | `TYPESCRIPT` | `.ts` | — | _(placeholder, future)_ |
+| Python | `PYTHON` | `.py` | — | _(placeholder, future)_ |
+| Mixed Content | _(via `ValidatorFactory.getMixedContentValidator()`)_ | `.html`, `.htm`, `.php` (when mixed content detected) | `MixedContentValidator` | `MixedContentSyntaxEngine` |
 
 1. **External-tool-first, pure-Java fallback** — every validator attempts the real external tool first; if the binary is missing it silently falls back to the embedded engine.
 2. **Immutable, structured results** — `ValidationResult` is a record-like value object with `isValid`, `message`, and `List<ValidationError>`. Each error carries 1-based line, column, message, and optional raw tool output.
@@ -36,11 +37,10 @@ The library takes an original source file plus a set of proposed modifications (
 
 | Layer | Technology |
 |---|---|
-| Language | Java 21+ |
+| Language | Java 25 |
 | Build tool | Gradle (Groovy DSL) |
 | Testing | JUnit 5 + AssertJ |
-| External tools (optional) | `node`, `python`, `php`, `stylelint`, `vnu.jar` |
-| Gradle cache | `org.gradle.caching=true`, parallel execution enabled |
+| External tools (optional) | `node`, `python`, `php`, `stylelint`, `vnu.jar`, `javac` (JDK) |
 
 **build.gradle** — standard `java-library` plugin, group `com.neel`, version `1.0.0`, description: *A pluggable Java library that validates the syntactic correctness of proposed source-code modifications before they are applied.*
 
@@ -58,9 +58,8 @@ F:\code-helper-mcp-library-java\
 └── src/
     ├── main/java/com/neel/syntaxvalidation/
     │   ├── SyntaxValidationLibrary.java      ← MAIN FACADE / ENTRY POINT
-    │   │
     │   ├── model/
-    │   │   ├── Language.java                  ← enum: JAVASCRIPT, CSS, HTML, PHP, MIXED
+    │   │   ├── Language.java                  ← enum: JAVASCRIPT, CSS, HTML, PHP, TYPESCRIPT, PYTHON, JAVA
     │   │   ├── ModificationRequest.java       ← line-range replacement descriptor
     │   │   ├── ValidationResult.java          ← immutable result (valid + message + errors)
     │   │   └── ValidationError.java           ← single diagnostic (line, col, message, toolOutput)
@@ -84,9 +83,22 @@ F:\code-helper-mcp-library-java\
     │   │   ├── html/
     │   │   │   ├── HtmlValidator.java
     │   │   │   └── HtmlSyntaxEngine.java
+    │   │   │   └── PhpOutputParser.java
     │   │   │
-    │   │   ├── php/
-    │   │   │   ├── PhpValidator.java
+    │   │   ├── java/
+    │   │   │   ├── JavaValidator.java          ← two-phase validator (syntax + javac fallback)
+    │   │   │   ├── JavaSyntaxEngine.java       ← pure-Java syntax checker orchestrator
+    │   │   │   ├── JavaLexer.java              ← hand-written dependency-free lexical analyser
+    │   │   │   ├── JavaToken.java              ← immutable token record (type, text, line, column)
+    │   │   │   ├── JavaTokenType.java          ← 9 token-type enum (NUMBER, KEYWORD, …, EOF)
+    │   │   │   ├── JavacOutputParser.java      ← parses javac error output
+    │   │   │   └── checker/
+    │   │   │       ├── SyntaxChecker.java          ← functional interface for checkers
+    │   │   │       ├── TokenizationErrorChecker.java  ← detects lexer ERROR tokens
+    │   │   │       ├── DelimiterBalanceChecker.java   ← validates (), {}, [] nesting
+    │   │   │       └── KeywordUsageChecker.java      ← validates keyword/modifier placement
+    │   │   │
+    │   │   └── mixed/
     │   │   │   ├── PhpSyntaxEngine.java
     │   │   │   └── PhpOutputParser.java
     │   │   │
@@ -124,6 +136,8 @@ F:\code-helper-mcp-library-java\
         │   │   ├── JavaScriptValidatorTest.java
         │   │   ├── JavaScriptSyntaxEngineTest.java
         │   │   ├── JavaScriptSyntaxTokenizerTest.java
+        │   │   ├── JsTokenTest.java
+        │   │   ├── JsTokenTypeTest.java
         │   │   └── NodeCheckOutputParserTest.java
         │   ├── css/
         │   │   ├── CssValidatorTest.java
@@ -132,11 +146,19 @@ F:\code-helper-mcp-library-java\
         │   ├── html/
         │   │   ├── HtmlValidatorTest.java
         │   │   ├── HtmlSyntaxEngineTest.java
-        │   │   └── VnuOutputParserTest.java
-        │   ├── php/
-        │   │   ├── PhpValidatorTest.java
-        │   │   ├── PhpSyntaxEngineTest.java
+        │   │   ├── VnuOutputParserTest.java
         │   │   └── PhpOutputParserTest.java
+        │   ├── java/
+        │   │   ├── JavaValidatorTest.java
+        │   │   ├── JavaSyntaxEngineTest.java
+        │   │   ├── JavaLexerTest.java
+        │   │   ├── JavaTokenTest.java
+        │   │   ├── JavaTokenTypeTest.java
+        │   │   ├── JavacOutputParserTest.java
+        │   │   └── checker/
+        │   │       ├── TokenizationErrorCheckerTest.java
+        │   │       ├── DelimiterBalanceCheckerTest.java
+        │   │       └── KeywordUsageCheckerTest.java
         │   └── mixed/
         │       ├── MixedContentValidatorTest.java
         │       ├── MixedContentSyntaxEngineTest.java
@@ -144,33 +166,25 @@ F:\code-helper-mcp-library-java\
         │       ├── PhpMixedContentIntegrationTest.java
         │       ├── HtmlContentExtractorTest.java
         │       └── ExtractedBlockTest.java
-        ├── process/
-        │   └── ProcessExecutorTest.java
-        ├── binary/
-        │   └── BinaryResolverTest.java
         ├── cache/
-        │   └── FileCacheTest.java
+        │   ├── FileCacheTest.java
+        │   └── FileCacheEntryTest.java
+        ├── process/
+        │   ├── ProcessExecutorTest.java
+        │   └── ProcessResultTest.java
         └── modification/
             └── ModificationApplierTest.java
-```
 
-**Total: 30 test files**
-
----
-
-## 4 · Key Source Files
+**Total: 43 test files**
 
 ### 4.1 Main Facade
-
-| File | Summary |
-|---|---|
 | `SyntaxValidationLibrary.java` | The primary entry point. Exposes `validateModification(path, original, modifications)` and `validateSource(language, source)`. Orchestrates `ValidatorFactory`, `ModificationApplier`, and `FileCache`. |
 
 ### 4.2 Model Layer
 
 | File | Summary |
 |---|---|
-| `Language.java` | Enum with values: `JAVASCRIPT`, `CSS`, `HTML`, `PHP`, `MIXED`. Each value carries its file extensions and a display name. Provides `fromExtension(String)` for filename→language mapping. |
+| `Language.java` | Enum with values: `JAVASCRIPT`, `CSS`, `HTML`, `PHP`, `TYPESCRIPT`, `PYTHON`, `JAVA`. Each value carries its file extensions and a display name. Provides `fromExtension(String)` for filename→language mapping. `TYPESCRIPT` and `PYTHON` are placeholders for future validators. |
 | `ModificationRequest.java` | Immutable descriptor: `startLine`, `endLine`, `newContent`, optional `description`. All indices are 1-based and inclusive. |
 | `ValidationResult.java` | Immutable outcome: `boolean valid`, `String message`, `List<ValidationError> errors`. Provides factory methods `valid(msg)` and `invalid(msg, errors)`. |
 | `ValidationError.java` | Immutable diagnostic: `int line`, `int column`, `String message`, `String toolOutput` (nullable). |
@@ -181,7 +195,7 @@ F:\code-helper-mcp-library-java\
 |---|---|
 | `LanguageValidator.java` | Interface: `getLanguage()`, `validateSource(String)`, `validateFile(Path)` |
 | `AbstractLanguageValidator.java` | Base class implementing the external-tool-first, pure-Java-fallback pattern. Uses `BinaryResolver` to check for external tool, `ProcessExecutor` to run it, and delegates to a `*SyntaxEngine` for the fallback. |
-| `ValidatorFactory.java` | Resolves `Language → LanguageValidator`. Maintains a map of all registered validators (JavaScript, CSS, HTML, PHP, Mixed). |
+| `ValidatorFactory.java` | Resolves `Language → LanguageValidator`. Maintains a map of all registered validators (JavaScript, CSS, HTML, PHP, Java). Also provides `getMixedContentValidator()` for mixed HTML/PHP content. |
 
 ### 4.4 JavaScript Validator
 
@@ -215,7 +229,22 @@ F:\code-helper-mcp-library-java\
 | `PhpSyntaxEngine.java` | Pure-Java engine. Three-phase validation: (1) tokeniser with full PHP 8.3+ support, (2) bracket/brace/parenthesis balance checks, (3) grammar-level validation of declarations, function signatures, control structures, use statements, and common error patterns. Covers: namespaces, traits, interfaces, enums, generators, constructor promotion, named arguments, match expressions, union/intersection/DNF types, readonly properties/classes, PHP 8.0 attributes. |
 | `PhpOutputParser.java` | Parses `php -l` output into `ValidationResult`. Handles: `Parse error`, `Fatal error`, `Warning`, `Deprecated` messages. Supports both PHP 7.x and 8.x error formats. |
 
-### 4.8 Mixed Content Validator
+### 4.8 Java Validator
+
+| File | Summary |
+|---|---|
+| `JavaValidator.java` | Extends `AbstractLanguageValidator`. External tool: `javac` (JDK). Two-phase validation: (1) pure-Java `JavaSyntaxEngine` for instant feedback, (2) `javac` fallback for deep semantic checks if no syntax errors found. |
+| `JavaSyntaxEngine.java` | Pure-Java syntax engine orchestrator. Runs a pipeline of `SyntaxChecker` instances over the token stream produced by `JavaLexer`. Provides both a default checker pipeline and a custom-pipeline overload. |
+| `JavaLexer.java` | Hand-written, dependency-free lexical analyser (~500 lines). Tokenises the full Java grammar: keywords (Java 25 set), identifiers, numeric literals (decimal, hex, octal, binary, floats, with underscores), string literals (with escapes), char literals, line comments, block comments, operators, and punctuation. Emits `JavaToken` list with accurate line/column tracking. |
+| `JavaToken.java` | Immutable record: `JavaTokenType type`, `String text`, `int line`, `int column`. Compact constructor validates non-null type/text and line/column ≥ 1. |
+| `JavaTokenType.java` | Enum with 9 values: `NUMBER`, `STRING`, `CHAR`, `IDENTIFIER`, `KEYWORD`, `PUNCTUATION`, `COMMENT`, `ERROR`, `EOF`. |
+| `JavacOutputParser.java` | Parses `javac` error output into `ValidationError` list. Extracts file, line, column, and message from diagnostic lines. Filters out source-echo lines, caret indicators, and summary lines. |
+| `checker/SyntaxChecker.java` | Functional interface: `check(List<JavaToken>) → List<ValidationError>`. Allows custom validation strategies to be composed into the `JavaSyntaxEngine` pipeline. |
+| `checker/TokenizationErrorChecker.java` | Detects lexer-produced `ERROR` tokens (unterminated strings, illegal characters, malformed numeric literals). Produces detailed error messages with position info and truncation for long lexemes. |
+| `checker/DelimiterBalanceChecker.java` | Validates balanced `()`, `{}`, `[]` nesting across the token stream. Tracks opening delimiters on a stack and detects: unclosed delimiters, mismatched closers, and stray closing delimiters. Skips `COMMENT` and `STRING`/`CHAR` tokens. |
+| `checker/KeywordUsageChecker.java` | Validates correct usage of Java keywords and modifiers: `package`, `import`, class/interface/enum/record declarations, method signatures, control structures, and modifier placement. Ensures statement completeness (missing semicolons, unclosed blocks). |
+
+### 4.9 Mixed Content Validator
 
 | File | Summary |
 |---|---|
@@ -295,6 +324,15 @@ For mixed-content files (HTML/PHP with embedded CSS/JS/PHP):
 - **Balance checks**: Parentheses, braces, brackets.
 - **Grammar checks**: Class/interface/trait/enum declarations, function signatures (union/intersection/DNF types, nullable, never return), parameter lists, control structures (if/elseif/else, for, foreach, while, do-while, switch, match), namespace/use statements, generator patterns (yield, yield from), constructor promotion, readonly properties/classes, enum backed types.
 
+### Java (`JavaLexer` + `JavaSyntaxEngine` + checkers)
+- **Lexer** (`JavaLexer`): Hand-written, dependency-free (~500 lines). Supports full Java grammar: keywords (Java 25 set incl. `sealed`, `non-sealed`, `permits`, `record`, `yield`, `var`), identifiers, numeric literals (decimal, hex `0x`, octal `0`, binary `0b`, floats with exponents, underscore separators), string literals (with escape sequences), char literals, line comments (`//`), block comments (`/* */`), all operators and punctuation.
+- **Token model**: `JavaToken` record (type, text, line, column) with `JavaTokenType` enum (9 categories: `NUMBER`, `STRING`, `CHAR`, `IDENTIFIER`, `KEYWORD`, `PUNCTUATION`, `COMMENT`, `ERROR`, `EOF`).
+- **Checker pipeline** (`JavaSyntaxEngine`): Pluggable `SyntaxChecker` functional interface with three default checkers:
+  - `TokenizationErrorChecker` — detects lexer-produced `ERROR` tokens (unterminated strings/chars, illegal characters, malformed numerics). Truncates long lexemes in error messages.
+  - `DelimiterBalanceChecker` — validates `()`, `{}`, `[]` nesting via stack-based tracking. Detects unclosed, mismatched, and stray closing delimiters.
+  - `KeywordUsageChecker` — validates keyword/modifier placement: `package`, `import`, class/interface/enum/record declarations, method signatures, control structures, modifier ordering, statement completeness.
+- **External tool fallback**: `JavaValidator` attempts pure-Java validation first (instant feedback). If no syntax errors and `javac` binary is available, runs `javac -Xlint:all` for deep semantic checks and parses output via `JavacOutputParser`.
+
 ### Mixed Content (`MixedContentSyntaxEngine`)
 - **Extraction**: Locates `<style>`, `<script>`, and `<?php … ?>` blocks via regex.
 - **Validation**: Delegates to the appropriate sub-engine for each block type.
@@ -308,7 +346,7 @@ For mixed-content files (HTML/PHP with embedded CSS/JS/PHP):
 ### `Language` enum
 - Each value has `extensions` (Set<String>), `displayName` (String).
 - `fromExtension(String)` returns `Optional<Language>`, case-insensitive.
-- Extension matching: `.js`/`.mjs`/`.cjs`/`.jsx` → JAVASCRIPT; `.css` → CSS; `.html`/`.htm`/`.xhtml` → HTML; `.php`/`.phtml`/`.phps` → PHP.
+- Extension matching: `.js`/`.mjs`/`.cjs`/`.jsx` → JAVASCRIPT; `.css` → CSS; `.html`/`.htm`/`.xhtml` → HTML; `.php`/`.phtml`/`.phps` → PHP; `.java` → JAVA; `.ts` → TYPESCRIPT; `.py` → PYTHON.
 
 ### `ModificationRequest`
 - `startLine` and `endLine` are 1-based, inclusive.
@@ -349,7 +387,12 @@ validators.put(Language.JAVASCRIPT, new JavaScriptValidator());
 validators.put(Language.CSS, new CssValidator());
 validators.put(Language.HTML, new HtmlValidator());
 validators.put(Language.PHP, new PhpValidator());
-validators.put(Language.MIXED, new MixedContentValidator());
+validators.put(Language.JAVA, new JavaValidator());
+// MixedContentValidator is NOT registered by Language key — it is
+// accessible via ValidatorFactory.getMixedContentValidator() for
+// HTML/PHP files that contain embedded CSS, JS, or PHP blocks.
+// TYPESCRIPT and PYTHON are placeholder enum values with no registered
+// validator yet.
 ```
 
 ### Singleton Syntax Engines
@@ -380,14 +423,12 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 }
 ```
 
----
-
-## 9 · Test Coverage (30 Test Files)
+## 9 · Test Coverage (39 Test Files)
 
 ### Model Tests (4)
 | Test | Covers |
 |---|---|
-| `LanguageTest` | Enum values, extension mapping, case insensitivity |
+| `LanguageTest` | Enum values (7 languages), extension mapping (.java/.ts/.py/.php etc.), case insensitivity, fromPath, exact constant set |
 | `ModificationRequestTest` | Construction, validation, equality |
 | `ValidationResultTest` | Factory methods, validity, error lists |
 | `ValidationErrorTest` | Construction, field access, equality |
@@ -396,7 +437,7 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 | Test | Covers |
 |---|---|
 | `AbstractLanguageValidatorTest` | Base class contract, fallback behavior |
-| `ValidatorFactoryTest` | Language→validator resolution, supported languages |
+| `ValidatorFactoryTest` | Language→validator resolution, Java validator registration, supported languages |
 | `JavaScriptValidatorTest` | Integration: valid/invalid JS, edge cases |
 | `CssValidatorTest` | Integration: valid/invalid CSS, edge cases |
 
@@ -412,11 +453,20 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 |---|---|
 | `CssSyntaxEngineTest` | Declarations, at-rules, selectors, balance |
 | `StylelintOutputParserTest` | `stylelint` JSON output parsing |
-
-### HTML Engine Tests (3)
+### Java Engine Tests (9)
 | Test | Covers |
 |---|---|
-| `HtmlValidatorTest` | Integration: valid/invalid HTML, edge cases |
+| `JavaValidatorTest` | Two-phase validation (syntax + javac fallback), language contract, binary discovery, command construction |
+| `JavaSyntaxEngineTest` | Default pipeline, custom checker pipeline, valid/invalid programs, static method, edge cases |
+| `JavaLexerTest` | Keywords (Java 25 set), identifiers, numeric literals (hex/oct/bin/float), strings (escapes), chars, comments (line/block), operators, position tracking, composite programs |
+| `JavaTokenTest` | Record construction, compact-constructor validation (null type/text, line/column < 1), accessors, equality, hashCode contract, toString, realistic lexer-produced tokens |
+| `JavaTokenTypeTest` | Enum constants (exact count of 9), valueOf resolution, name/toString, ordinal stability, EnumSet operations, semantic properties for downstream checkers |
+| `JavacOutputParserTest` | Empty/null output, error diagnostics, warnings, source-echo filtering, caret lines, summary lines, unexpected output |
+| `TokenizationErrorCheckerTest` | Clean source, unterminated string/char/block comment, illegal characters, multiple errors, long-text truncation, position preservation |
+| `DelimiterBalanceCheckerTest` | Balanced nesting, unclosed delimiters, mismatched closers, stray closers, string/comment skipping |
+| `KeywordUsageCheckerTest` | Modifier placement, reserved keywords, annotations, statement completeness, complex programs |
+
+### Mixed Content Tests (6)
 | `HtmlSyntaxEngineTest` | Tag matching, attributes, void elements, nesting |
 | `VnuOutputParserTest` | `vnu.jar` output parsing |
 
@@ -457,16 +507,18 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 ### Adding a New Language Validator
 
 1. Add enum value to `Language.java` with extensions and display name.
-2. Create `NewLangValidator extends AbstractLanguageValidator` in `validator.newlang/`.
-3. Create `NewLangSyntaxEngine` as the pure-Java fallback.
+2. Create `NewLangValidator extends AbstractLanguageValidator` in `validator/newlang/`.
+3. Create `NewLangSyntaxEngine` as the pure-Java fallback. For complex languages, consider the modular pattern used by the Java validator: `Lexer` → `Token` model → `SyntaxChecker` pipeline (see `validator/java/` as a reference implementation).
 4. (Optional) Create `NewLangOutputParser` if an external tool produces parseable output.
 5. Register in `ValidatorFactory.java`.
-6. Write tests: `NewLangValidatorTest`, `NewLangSyntaxEngineTest`, (optional) `NewLangOutputParserTest`.
+6. Write tests: `NewLangValidatorTest`, `NewLangSyntaxEngineTest`, token model tests, checker tests, (optional) `NewLangOutputParserTest`.
 
 ### Adding a New Pure-Java Engine Rule
 
 1. Locate the relevant `*SyntaxEngine.java`.
-2. Add the validation rule in the appropriate phase (tokeniser, balance, grammar).
+2. For Java: implement a new `SyntaxChecker` and add it to the `JavaSyntaxEngine` default pipeline (or pass it via the custom-pipeline overload).
+3. For other languages: add the validation rule in the appropriate phase (tokeniser, balance, grammar).
+4. Add test cases in the corresponding `*SyntaxEngineTest.java` or `*CheckerTest.java`.
 3. Add test cases in the corresponding `*SyntaxEngineTest.java`.
 
 ### Adding Mixed Content Support for a New Language
@@ -479,7 +531,9 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 
 ## 11 · Important Notes
 
-- **No `Language.JAVA` support** — the library does not validate Java source files.
+- **Java validator has a modular architecture** — `JavaValidator` → `JavaSyntaxEngine` → `JavaLexer` + `SyntaxChecker` pipeline (3 default checkers: `TokenizationErrorChecker`, `DelimiterBalanceChecker`, `KeywordUsageChecker`). New checkers can be plugged in via the `SyntaxChecker` functional interface.
+- **`JavaValidator` uses two-phase validation** — phase 1 runs the pure-Java `JavaSyntaxEngine` for instant feedback; phase 2 runs `javac` (if available) for deep semantic checks. Phase 2 only runs when phase 1 finds no syntax errors.
+- **`TYPESCRIPT` and `PYTHON` are placeholder enum values** — `Language.TYPESCRIPT` and `Language.PYTHON` exist for extension mapping, but no validators are registered yet. `ValidatorFactory.get(Language.TYPESCRIPT)` returns `Optional.empty()`.
 - **External tools are optional** — the library works fully offline with pure-Java engines.
 - **File cache is in-memory** — not persisted across JVM restarts.
 - **ModificationApplier operates in-memory** — never writes to disk.

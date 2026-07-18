@@ -2,6 +2,7 @@ package com.neel.syntaxvalidation.validator;
 
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationResult;
+import com.neel.syntaxvalidation.validator.java.JavaValidator;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
 import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import org.junit.jupiter.api.Test;
@@ -20,10 +21,20 @@ class ValidatorFactoryTest {
     }
 
     @Test
+    void defaultFactory_registersJavaValidator() {
+        ValidatorFactory factory = new ValidatorFactory();
+
+        assertThat(factory.getValidator(Language.JAVA))
+                .isPresent()
+                .containsInstanceOf(JavaValidator.class);
+    }
+
+    @Test
     void defaultFactory_hasSupportedLanguages() {
         ValidatorFactory factory = new ValidatorFactory();
 
         assertThat(factory.supportedLanguages()).contains(Language.JAVASCRIPT);
+        assertThat(factory.supportedLanguages()).contains(Language.JAVA);
     }
 
     @Test
