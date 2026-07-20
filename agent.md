@@ -21,7 +21,7 @@ The library takes an original source file plus a set of proposed modifications (
 | PHP | `PHP` | `.php`, `.phtml`, `.phps` | `PhpValidator` | `PhpSyntaxEngine` |
 | Java | `JAVA` | `.java` | `JavaValidator` | `JavaLexer` + `JavaSyntaxEngine` + 3 checkers |
 | TypeScript | `TYPESCRIPT` | `.ts` | — | _(placeholder, future)_ |
-| Python | `PYTHON` | `.py` | — | _(placeholder, future)_ |
+| Python | `PYTHON` | `.py` | `PythonValidator` | `PythonLexer` + `PythonParser` + `PythonSyntaxEngine` (two-phase: engine + python3 binary) |
 | Mixed Content | _(via `ValidatorFactory.getMixedContentValidator()`)_ | `.html`, `.htm`, `.php` (when mixed content detected) | `MixedContentValidator` | `MixedContentSyntaxEngine` |
 
 1. **External-tool-first, pure-Java fallback** — every validator attempts the real external tool first; if the binary is missing it silently falls back to the embedded engine.
@@ -29,7 +29,7 @@ The library takes an original source file plus a set of proposed modifications (
 3. **Strategy pattern** — `LanguageValidator` (interface) → `AbstractLanguageValidator` (base) → concrete per-language validators. `ValidatorFactory` resolves the correct validator for a `Language` enum.
 4. **Modification pipeline** — `ModificationApplier` applies line-range replacements to produce a candidate snapshot without touching disk. The library validates this snapshot.
 5. **In-memory file cache** — `FileCache` holds `FileCacheEntry` snapshots keyed by `Path`, avoiding repeated disk reads during batch validation.
-6. **Stateless engines** — all syntax engines (`CssSyntaxEngine`, `HtmlSyntaxEngine`, `JavaScriptSyntaxEngine`, `PhpSyntaxEngine`, `MixedContentSyntaxEngine`) are stateless singletons, safe for concurrent use.
+6. **Stateless engines** — all syntax engines (`CssSyntaxEngine`, `HtmlSyntaxEngine`, `JavaScriptSyntaxEngine`, `PhpSyntaxEngine`, `MixedContentSyntaxEngine`, `PythonSyntaxEngine`) are stateless singletons, safe for concurrent use.
 
 ---
 
@@ -105,11 +105,19 @@ F:\code-helper-mcp-library-java\
     │   │   └── mixed/
     │   │       ├── MixedContentValidator.java
     │   │       ├── MixedContentSyntaxEngine.java
+    │   │       ├── MixedContentValidator.java
+    │   │       ├── MixedContentSyntaxEngine.java
     │   │       ├── HtmlContentExtractor.java
     │   │       └── ExtractedBlock.java
     │   │
-    │   ├── process/
-    │   │   ├── ProcessExecutor.java             ← runs external CLI tools
+    │   │   └── python/
+    │   │       ├── PythonValidator.java          ← two-phase validator (engine + python binary)
+    │   │       ├── PythonSyntaxEngine.java       ← pure-Java syntax engine (lex → parse → checks)
+    │   │       ├── PythonLexer.java              ← hand-written dependency-free Python 3.14 lexer
+    │   │       ├── PythonParser.java             ← structural parser with 10+ validation checks
+    │   │       ├── PythonToken.java              ← immutable token record (type, text, line, column)
+    │   │       ├── PythonTokenType.java          ← 78 token-type enum (keywords, literals, operators, …, EOF)
+    │   │       └── PythonOutputParser.java       ← parses python3 binary error output
     │   │   └── ProcessResult.java               ← exit code + stdout + stderr capture
     │   │
     │   ├── binary/
@@ -165,9 +173,19 @@ F:\code-helper-mcp-library-java\
         │       ├── MixedContentIntegrationTest.java
         │       ├── PhpMixedContentIntegrationTest.java
         │       ├── HtmlContentExtractorTest.java
+        │   └── mixed/
+        │       ├── MixedContentValidatorTest.java
+        │       ├── MixedContentSyntaxEngineTest.java
+        │       ├── MixedContentIntegrationTest.java
+        │       ├── PhpMixedContentIntegrationTest.java
+        │       ├── HtmlContentExtractorTest.java
         │       └── ExtractedBlockTest.java
-        ├── cache/
-        │   ├── FileCacheTest.java
+        │   └── python/
+        │       ├── PythonValidatorTest.java
+        │       ├── PythonSyntaxEngineTest.java
+        │       ├── PythonLexerTest.java
+        │       ├── PythonParserTest.java
+        │       └── PythonOutputParserTest.java
         │   └── FileCacheEntryTest.java
         ├── process/
         │   ├── ProcessExecutorTest.java

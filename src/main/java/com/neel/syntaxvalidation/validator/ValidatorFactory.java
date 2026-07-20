@@ -7,6 +7,7 @@ import com.neel.syntaxvalidation.validator.java.JavaValidator;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
 import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import com.neel.syntaxvalidation.validator.php.PhpValidator;
+import com.neel.syntaxvalidation.validator.python.PythonValidator;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -26,6 +27,8 @@ import java.util.Optional;
  *   <li>{@link Language#HTML}       &rarr; {@link HtmlValidator}</li>
  *   <li>{@link Language#CSS}        &rarr; {@link CssValidator}</li>
  *   <li>{@link Language#PHP}        &rarr; {@link PhpValidator}</li>
+ *   <li>{@link Language#JAVA}       &rarr; {@link JavaValidator}</li>
+ *   <li>{@link Language#PYTHON}     &rarr; {@link PythonValidator}</li>
  * </ul>
  *
  * <p><b>Thread-safety.</b> This class is safe for concurrent reads from
@@ -49,7 +52,7 @@ public final class ValidatorFactory {
      * Creates a new factory, optionally registering built-in validators.
      *
      * @param registerBuiltins {@code true} to register the built-in
-     *                         JavaScript, HTML, CSS, PHP, and Java validators;
+     *                         JavaScript, HTML, CSS, PHP, Java, and Python validators;
      *                         {@code false} for an empty factory.
      */
     public ValidatorFactory(boolean registerBuiltins) {
@@ -59,6 +62,9 @@ public final class ValidatorFactory {
             validators.put(Language.CSS, new CssValidator());
             validators.put(Language.PHP, new PhpValidator());
             validators.put(Language.JAVA, new JavaValidator());
+            validators.put(Language.PYTHON, new PythonValidator(
+                    new com.neel.syntaxvalidation.binary.BinaryResolver(),
+                    new com.neel.syntaxvalidation.process.ProcessExecutor()));
         }
     }
 

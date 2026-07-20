@@ -76,18 +76,18 @@ class SyntaxValidationLibraryTest {
 
     @Test
     void validate_returnsInvalidWhenNoValidatorRegistered() throws IOException {
-        Path file = writeFile("app.py", "print('hi')\n");
+        Path file = writeFile("app.ts", "const x: number = 1;\n");
         SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
         ValidationResult result = library.validate(ModificationRequest.builder()
                 .filePath(file.toString())
                 .fromLine(1)
                 .toLine(1)
-                .replacement("print('bye')")
+                .replacement("const y: string = 'hi';")
                 .build());
 
         assertThat(result.isValid()).isFalse();
-        assertThat(result.getMessage()).contains("validator").contains("PYTHON");
+        assertThat(result.getMessage()).contains("validator").contains("TYPESCRIPT");
     }
 
     @Test
