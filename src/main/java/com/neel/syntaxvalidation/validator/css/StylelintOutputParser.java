@@ -158,7 +158,7 @@ final class StylelintOutputParser {
                 return unescapeJson(m.group(2));
             }
         }
-        return null;
+        return "";
     }
 
     private static int extractIntValue(String block, String key) {

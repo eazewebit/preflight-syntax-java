@@ -20,7 +20,7 @@ The library takes an original source file plus a set of proposed modifications (
 | HTML | `HTML` | `.html`, `.htm`, `.xhtml` | `HtmlValidator` | `HtmlSyntaxEngine` |
 | PHP | `PHP` | `.php`, `.phtml`, `.phps` | `PhpValidator` | `PhpSyntaxEngine` |
 | Java | `JAVA` | `.java` | `JavaValidator` | `JavaLexer` + `JavaSyntaxEngine` + 3 checkers |
-| TypeScript | `TYPESCRIPT` | `.ts` | — | _(placeholder, future)_ |
+| TypeScript | `TYPESCRIPT` | `.ts`, `.tsx`, `.jsx` | `TypeScriptValidator` | `TypeScriptSyntaxEngine` |
 | Python | `PYTHON` | `.py` | `PythonValidator` | `PythonLexer` + `PythonParser` + `PythonSyntaxEngine` (two-phase: engine + python3 binary) |
 | Mixed Content | _(via `ValidatorFactory.getMixedContentValidator()`)_ | `.html`, `.htm`, `.php` (when mixed content detected) | `MixedContentValidator` | `MixedContentSyntaxEngine` |
 
@@ -274,6 +274,17 @@ F:\code-helper-mcp-library-java\
 | `PythonTokenType.java` | Enum with 78 values covering: keywords (35 types), identifiers, numeric types (4), string types (6), operators (17), punctuation (5), decorators, comments, newlines, indentation, errors, and EOF. |
 | `PythonOutputParser.java` | Parses `python3 -m py_compile` error output into `ValidationResult`. Extracts file, line, column, and message from Python's diagnostic format. |
 
+### 4.10 TypeScript Validator
+
+| File | Summary |
+|---|---|
+| `TypeScriptValidator.java` | Extends `AbstractLanguageValidator`. Two-phase validation: (1) pure-Java `TypeScriptSyntaxEngine` for instant feedback, (2) `tsc` binary (if available) for deep semantic checks. Supports `.ts`, `.tsx`, and `.jsx` files with automatic JSX detection. |
+| `TypeScriptSyntaxEngine.java` | Pure-Java syntax engine. Runs `TypeScriptSyntaxTokenizer` → structural validation. Validates: bracket balance (parentheses, braces, brackets, generics), JSX tag balancing, template literal nesting, and common TypeScript patterns. |
+| `TypeScriptSyntaxTokenizer.java` | Hand-written, dependency-free lexical analyser for TypeScript/TSX/JSX. Tokenises: keywords (TypeScript keyword set), identifiers, numeric literals, string literals (single/double-quoted, template literals), operators, comments, JSX tags, and JSX attributes. Supports JSX mode for `.tsx`/`.jsx` files. |
+| `TsToken.java` | Immutable record: `TsTokenType type`, `String text`, `int line`, `int column`. Compact constructor validates non-null type/text and line/column ≥ 1. |
+| `TsTokenType.java` | Enum with ~40 values covering: keywords, identifiers, numbers, strings, template literals, operators, punctuation, comments, whitespace, generic brackets, JSX tokens, and error tokens. |
+| `TscOutputParser.java` | Parses `tsc` error output into `ValidationError` list. Extracts file, line, column, and message from TypeScript compiler diagnostic format. |
+
 ### 4.10 Mixed Content Validator
 
 | File | Summary |
@@ -382,7 +393,7 @@ For mixed-content files (HTML/PHP with embedded CSS/JS/PHP):
 ### `Language` enum
 - Each value has `extensions` (Set<String>), `displayName` (String).
 - `fromExtension(String)` returns `Optional<Language>`, case-insensitive.
-- Extension matching: `.js`/`.mjs`/`.cjs`/`.jsx` → JAVASCRIPT; `.css` → CSS; `.html`/`.htm`/`.xhtml` → HTML; `.php`/`.phtml`/`.phps` → PHP; `.java` → JAVA; `.ts` → TYPESCRIPT; `.py` → PYTHON.
+- Extension matching: `.js`/`.mjs`/`.cjs`/`.jsx` → JAVASCRIPT; `.css` → CSS; `.html`/`.htm`/`.xhtml` → HTML; `.php`/`.phtml`/`.phps` → PHP; `.java` → JAVA; `.ts`/`.tsx`/`.jsx` → TYPESCRIPT; `.py` → PYTHON.
 
 ### `ModificationRequest`
 - `startLine` and `endLine` are 1-based, inclusive.
@@ -424,10 +435,10 @@ validators.put(Language.CSS, new CssValidator());
 validators.put(Language.HTML, new HtmlValidator());
 validators.put(Language.PHP, new PhpValidator());
 validators.put(Language.JAVA, new JavaValidator());
+validators.put(Language.TYPESCRIPT, new TypeScriptValidator());
 // MixedContentValidator is NOT registered by Language key — it is
 // accessible via ValidatorFactory.getMixedContentValidator() for
 // HTML/PHP files that contain embedded CSS, JS, or PHP blocks.
-// TYPESCRIPT is a placeholder enum value with no registered validator yet.
 // PYTHON is fully implemented with PythonValidator.
 ```
 
@@ -569,7 +580,7 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 
 - **Java validator has a modular architecture** — `JavaValidator` → `JavaSyntaxEngine` → `JavaLexer` + `SyntaxChecker` pipeline (3 default checkers: `TokenizationErrorChecker`, `DelimiterBalanceChecker`, `KeywordUsageChecker`). New checkers can be plugged in via the `SyntaxChecker` functional interface.
 - **`JavaValidator` uses two-phase validation** — phase 1 runs the pure-Java `JavaSyntaxEngine` for instant feedback; phase 2 runs `javac` (if available) for deep semantic checks. Phase 2 only runs when phase 1 finds no syntax errors.
-- **`TYPESCRIPT` is a placeholder enum value** — `Language.TYPESCRIPT` exists for extension mapping, but no validator is registered yet. `ValidatorFactory.get(Language.TYPESCRIPT)` returns `Optional.empty()`. `PYTHON` is fully implemented with a complete validator (`PythonValidator`), lexer (`PythonLexer`), parser (`PythonParser`), syntax engine (`PythonSyntaxEngine`), and output parser (`PythonOutputParser`).
+- **`TYPESCRIPT` is fully implemented** — `Language.TYPESCRIPT` supports `.ts`, `.tsx`, and `.jsx` files. `TypeScriptValidator` uses two-phase validation: phase 1 runs the pure-Java `TypeScriptSyntaxEngine` for instant feedback; phase 2 runs `tsc` (if available) for deep semantic checks. The engine supports TypeScript-specific syntax including generics, JSX/TSX, template literals, and TypeScript keywords.
 - **External tools are optional** — the library works fully offline with pure-Java engines.
 - **File cache is in-memory** — not persisted across JVM restarts.
 - **ModificationApplier operates in-memory** — never writes to disk.

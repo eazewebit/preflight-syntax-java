@@ -153,7 +153,7 @@ final class VnuOutputParser {
                 col = extractIntValue(block, "firstColumn");
             }
 
-            if (message == null || message.isBlank()) {
+            if (message.isBlank()) {
                 continue;
             }
 
@@ -173,7 +173,7 @@ final class VnuOutputParser {
                 return unescapeJson(m.group(2));
             }
         }
-        return null;
+        return "";
     }
 
     private static int extractIntValue(String block, String key) {

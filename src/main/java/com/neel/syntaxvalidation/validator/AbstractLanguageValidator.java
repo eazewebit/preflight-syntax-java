@@ -4,6 +4,8 @@ import com.neel.syntaxvalidation.binary.BinaryResolver;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.process.ProcessExecutor;
 import com.neel.syntaxvalidation.process.ProcessResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -35,6 +37,8 @@ import java.util.Optional;
  * the message produced by {@link #binaryNotFoundMessage()}.
  */
 public abstract class AbstractLanguageValidator implements LanguageValidator {
+
+    protected final Logger log = LoggerFactory.getLogger(getClass());
 
     private final String preferredBinaryPath;
     private final String binaryName;
@@ -90,12 +94,15 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
             tempFile = createTempFile();
             Files.writeString(tempFile, safeContent, StandardCharsets.UTF_8);
             List<String> command = buildCommand(binary.get(), tempFile);
+            log.debug("Executing command: {}", command);
             ProcessResult result = processExecutor.execute(command);
             return parseOutput(result, tempFile);
         } catch (IOException e) {
+            log.error("I/O error during validation", e);
             return ValidationResult.invalid("Validation failed due to an I/O error: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            log.warn("Validation was interrupted");
             return ValidationResult.invalid("Validation was interrupted before it could complete.");
         } finally {
             if (tempFile != null) {

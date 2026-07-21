@@ -9,6 +9,8 @@ import com.neel.syntaxvalidation.modification.ModificationApplier;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
 import com.neel.syntaxvalidation.validator.ValidatorFactory;
 import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
@@ -35,6 +37,11 @@ import java.util.Optional;
  * per-invocation state.
  */
 public class SyntaxValidationLibrary {
+
+    /** Library version – useful for diagnostics and logging. */
+    public static final String VERSION = "1.0.0";
+
+    private static final Logger log = LoggerFactory.getLogger(SyntaxValidationLibrary.class);
 
     private final FileCache fileCache;
     private final ValidatorFactory validatorFactory;
@@ -69,15 +76,18 @@ public class SyntaxValidationLibrary {
         }
 
         Path path = Path.of(request.getFilePath());
+        log.debug("Validating modification for file: {}", path);
 
         Optional<Language> language = Language.fromPath(path);
         if (language.isEmpty()) {
+            log.warn("Unsupported file extension: {}", path);
             return ValidationResult.invalid(
                     "Unable to detect a supported language from the file extension: " + path);
         }
 
         Optional<LanguageValidator> validator = validatorFactory.getValidator(language.get());
         if (validator.isEmpty()) {
+            log.warn("No validator registered for language: {}", language.get());
             return ValidationResult.invalid(
                     "No validator is registered for language: " + language.get());
         }
@@ -86,8 +96,10 @@ public class SyntaxValidationLibrary {
         try {
             entry = fileCache.getOrLoad(path);
         } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
             return ValidationResult.invalid("File does not exist: " + path);
         } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 
@@ -98,7 +110,9 @@ public class SyntaxValidationLibrary {
                 request.getReplacement());
 
         String modifiedContent = String.join("\n", modifiedLines);
-        return validator.get().validate(modifiedContent);
+        ValidationResult result = validator.get().validate(modifiedContent);
+        log.debug("Validation result for {}: valid={}", path, result.isValid());
+        return result;
     }
 
     /**
@@ -126,8 +140,11 @@ public class SyntaxValidationLibrary {
         if (htmlSource == null) {
             throw new IllegalArgumentException("htmlSource must not be null");
         }
+        log.debug("Validating mixed HTML/CSS/JS content ({} chars)", htmlSource.length());
         MixedContentValidator mixedValidator = validatorFactory.getMixedContentValidator();
-        return mixedValidator.validate(htmlSource);
+        ValidationResult result = mixedValidator.validate(htmlSource);
+        log.debug("Mixed-content validation result: valid={}", result.isValid());
+        return result;
     }
 
     /**
@@ -150,13 +167,16 @@ public class SyntaxValidationLibrary {
         }
 
         Path path = Path.of(request.getFilePath());
+        log.debug("Validating mixed-content modification for file: {}", path);
 
         FileCacheEntry entry;
         try {
             entry = fileCache.getOrLoad(path);
         } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
             return ValidationResult.invalid("File does not exist: " + path);
         } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 

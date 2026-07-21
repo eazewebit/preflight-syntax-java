@@ -3,6 +3,8 @@ package com.neel.syntaxvalidation.validator.mixed;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 /**
@@ -33,6 +35,8 @@ import java.util.Optional;
  * either stateless or thread-safe.
  */
 public class MixedContentValidator implements LanguageValidator {
+
+    private static final Logger log = LoggerFactory.getLogger(MixedContentValidator.class);
 
     private final MixedContentSyntaxEngine mixedEngine;
 
@@ -72,7 +76,10 @@ public class MixedContentValidator implements LanguageValidator {
         if (source == null) {
             throw new NullPointerException("source must not be null");
         }
-        return mixedEngine.validate(source);
+        log.debug("Validating mixed HTML/CSS/JS content ({} chars)", source.length());
+        ValidationResult result = mixedEngine.validate(source);
+        log.debug("Mixed-content validation completed: valid={}", result.isValid());
+        return result;
     }
 
     /**

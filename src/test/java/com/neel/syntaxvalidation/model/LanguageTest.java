@@ -137,6 +137,18 @@ class LanguageTest {
         }
 
         @Test
+        @DisplayName("detects .tsx extension")
+        void detectsTsx() {
+            assertThat(Language.fromExtension("tsx")).contains(Language.TYPESCRIPT);
+        }
+
+        @Test
+        @DisplayName("detects .jsx extension")
+        void detectsJsx() {
+            assertThat(Language.fromExtension("jsx")).contains(Language.TYPESCRIPT);
+        }
+
+        @Test
         @DisplayName("detects .py extension")
         void detectsPy() {
             assertThat(Language.fromExtension("py")).contains(Language.PYTHON);
@@ -273,6 +285,20 @@ class LanguageTest {
         }
 
         @Test
+        @DisplayName("detects TSX from Path")
+        void detectsTsxFromPath() {
+            Path path = Path.of("/home/user/project/App.tsx");
+            assertThat(Language.fromPath(path)).contains(Language.TYPESCRIPT);
+        }
+
+        @Test
+        @DisplayName("detects JSX from Path")
+        void detectsJsxFromPath() {
+            Path path = Path.of("/home/user/project/Component.jsx");
+            assertThat(Language.fromPath(path)).contains(Language.TYPESCRIPT);
+        }
+
+        @Test
         @DisplayName("detects Python from Path")
         void detectsPyFromPath() {
             Path path = Path.of("/home/user/project/main.py");
@@ -360,9 +386,9 @@ class LanguageTest {
         }
 
         @Test
-        @DisplayName("TYPESCRIPT has ts extension")
+        @DisplayName("TYPESCRIPT has ts, tsx, jsx extensions")
         void typescriptExtensions() {
-            assertThat(Language.TYPESCRIPT.getExtensions()).containsExactly("ts");
+            assertThat(Language.TYPESCRIPT.getExtensions()).containsExactlyInAnyOrder("ts", "tsx", "jsx");
         }
 
         @Test

@@ -75,7 +75,7 @@ class SyntaxValidationLibraryTest {
     }
 
     @Test
-    void validate_returnsInvalidWhenNoValidatorRegistered() throws IOException {
+    void validate_returnsValidWhenTypeScriptValidatorRegistered() throws IOException {
         Path file = writeFile("app.ts", "const x: number = 1;\n");
         SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
@@ -86,8 +86,25 @@ class SyntaxValidationLibraryTest {
                 .replacement("const y: string = 'hi';")
                 .build());
 
+        // TypeScript now has a validator registered, so valid code should pass
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void validate_returnsInvalidWhenNoValidatorRegistered() throws IOException {
+        // Use a file with unsupported extension to test no-validator scenario
+        Path file = writeFile("app.xyz", "some content\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        ValidationResult result = library.validate(ModificationRequest.builder()
+                .filePath(file.toString())
+                .fromLine(1)
+                .toLine(1)
+                .replacement("new content")
+                .build());
+
         assertThat(result.isValid()).isFalse();
-        assertThat(result.getMessage()).contains("validator").contains("TYPESCRIPT");
+        assertThat(result.getMessage()).contains("language");
     }
 
     @Test

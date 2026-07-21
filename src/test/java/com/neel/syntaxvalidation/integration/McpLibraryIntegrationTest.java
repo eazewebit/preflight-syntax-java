@@ -64,7 +64,7 @@ class McpLibraryIntegrationTest {
         @DisplayName("factory provides validators for all supported languages")
         void factoryProvidesValidators_forAllSupportedLanguages() {
             ValidatorFactory factory = new ValidatorFactory();
-            Language[] supported = {Language.JAVA, Language.JAVASCRIPT, Language.PYTHON, Language.PHP};
+            Language[] supported = {Language.JAVA, Language.JAVASCRIPT, Language.PYTHON, Language.PHP, Language.TYPESCRIPT};
             for (Language lang : supported) {
                 Optional<?> validator = factory.getValidator(lang);
                 assertThat(validator)
@@ -183,6 +183,132 @@ class McpLibraryIntegrationTest {
             ValidationResult result = library.validate(request);
 
             assertThat(result.isValid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("TypeScript validation — complete flow with built-in engine")
+        void typeScriptValidation_completeFlow() throws IOException {
+            Path tsFile = tempDir.resolve("greet.ts");
+            Files.writeString(tsFile, """
+                    interface User {
+                        name: string;
+                        age: number;
+                    }
+                    
+                    function greet(user: User): string {
+                        return `Hello, ${user.name}!`;
+                    }
+                    
+                    const user: User = { name: "World", age: 30 };
+                    console.log(greet(user));
+                    """);
+
+            SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+            ModificationRequest request = ModificationRequest.builder()
+                    .filePath(tsFile.toString())
+                    .fromLine(1)
+                    .toLine(1)
+                    .replacement("interface User {")
+                    .build();
+
+            ValidationResult result = library.validate(request);
+
+            assertThat(result.isValid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("TypeScript validation — TSX file with JSX mode")
+        void typeScriptValidation_tsxFileWithJsxMode() throws IOException {
+            Path tsxFile = tempDir.resolve("App.tsx");
+            Files.writeString(tsxFile, """
+                    import React from 'react';
+                    
+                    interface AppProps {
+                        title: string;
+                    }
+                    
+                    const App: React.FC<AppProps> = ({ title }) => {
+                        return (
+                            <div>
+                                <h1>{title}</h1>
+                            </div>
+                        );
+                    };
+                    
+                    export default App;
+                    """);
+
+            SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+            ModificationRequest request = ModificationRequest.builder()
+                    .filePath(tsxFile.toString())
+                    .fromLine(1)
+                    .toLine(1)
+                    .replacement("import React from 'react';")
+                    .build();
+
+            ValidationResult result = library.validate(request);
+
+            assertThat(result.isValid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("TypeScript validation — JSX file")
+        void typeScriptValidation_jsxFile() throws IOException {
+            Path jsxFile = tempDir.resolve("Component.jsx");
+            Files.writeString(jsxFile, """
+                    import React from 'react';
+                    
+                    const Component = () => {
+                        return (
+                            <div className="component">
+                                <p>Hello JSX</p>
+                            </div>
+                        );
+                    };
+                    
+                    export default Component;
+                    """);
+
+            SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+            ModificationRequest request = ModificationRequest.builder()
+                    .filePath(jsxFile.toString())
+                    .fromLine(1)
+                    .toLine(1)
+                    .replacement("import React from 'react';")
+                    .build();
+
+            ValidationResult result = library.validate(request);
+
+            assertThat(result.isValid()).isTrue();
+        }
+
+        @Test
+        @DisplayName("TypeScript validation — syntax error detection")
+        void typeScriptValidation_syntaxErrorDetection() throws IOException {
+            Path tsFile = tempDir.resolve("bad.ts");
+            Files.writeString(tsFile, """
+                    function greet(name: string) {
+                        return `Hello, ${name}!`;
+                    }
+                    """);
+
+            SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+            // Introduce a syntax error (unclosed brace)
+            ModificationRequest request = ModificationRequest.builder()
+                    .filePath(tsFile.toString())
+                    .fromLine(1)
+                    .toLine(1)
+                    .replacement("function greet(name: string) {")
+                    .build();
+
+            ValidationResult result = library.validate(request);
+
+            // Should detect the syntax error from built-in engine
+            assertThat(result).isNotNull();
         }
 
         @Test

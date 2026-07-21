@@ -27,8 +27,8 @@ public enum Language {
     /** PHP (files with a {@code .php}, {@code .phtml}, or {@code .phps} extension). */
     PHP("php", "phtml", "phps"),
 
-    /** TypeScript (files with a {@code .ts} extension). Placeholder for future support. */
-    TYPESCRIPT("ts"),
+    /** TypeScript (files with a {@code .ts}, {@code .tsx}, or {@code .jsx} extension). */
+    TYPESCRIPT("ts", "tsx", "jsx"),
 
     /** Python (files with a {@code .py} extension). Placeholder for future support. */
     PYTHON("py"),

@@ -8,6 +8,7 @@ import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
 import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import com.neel.syntaxvalidation.validator.php.PhpValidator;
 import com.neel.syntaxvalidation.validator.python.PythonValidator;
+import com.neel.syntaxvalidation.validator.typescript.TypeScriptValidator;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -24,6 +25,7 @@ import java.util.Optional;
  * <h2>Built-in validators</h2>
  * <ul>
  *   <li>{@link Language#JAVASCRIPT} &rarr; {@link JavaScriptValidator}</li>
+ *   <li>{@link Language#TYPESCRIPT} &rarr; {@link TypeScriptValidator}</li>
  *   <li>{@link Language#HTML}       &rarr; {@link HtmlValidator}</li>
  *   <li>{@link Language#CSS}        &rarr; {@link CssValidator}</li>
  *   <li>{@link Language#PHP}        &rarr; {@link PhpValidator}</li>
@@ -65,6 +67,7 @@ public final class ValidatorFactory {
             validators.put(Language.PYTHON, new PythonValidator(
                     new com.neel.syntaxvalidation.binary.BinaryResolver(),
                     new com.neel.syntaxvalidation.process.ProcessExecutor()));
+            validators.put(Language.TYPESCRIPT, new TypeScriptValidator(Language.TYPESCRIPT));
         }
     }
 
