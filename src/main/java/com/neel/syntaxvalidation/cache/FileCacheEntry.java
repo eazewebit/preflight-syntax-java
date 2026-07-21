@@ -18,6 +18,7 @@ public final class FileCacheEntry {
     private final List<String> lines;
     private final long lastModified;
     private final long loadedAt;
+    private volatile long lastAccessed;
 
     /**
      * @param absolutePath the absolute path of the file.
@@ -30,6 +31,7 @@ public final class FileCacheEntry {
         this.lines = List.copyOf(lines);
         this.lastModified = lastModified;
         this.loadedAt = loadedAt;
+        this.lastAccessed = loadedAt;
     }
 
     /** @return the absolute path of the cached file. */
@@ -60,6 +62,16 @@ public final class FileCacheEntry {
     /** @return the wall-clock instant at which the entry was created (millis). */
     public long getLoadedAt() {
         return loadedAt;
+    }
+
+    /** @return the wall-clock instant at which the entry was last accessed (millis). */
+    public long getLastAccessed() {
+        return lastAccessed;
+    }
+
+    /** Updates the last-accessed timestamp to the current time. */
+    public void touch() {
+        this.lastAccessed = System.currentTimeMillis();
     }
 
     @Override

@@ -9,9 +9,14 @@ import com.neel.syntaxvalidation.process.ProcessResult;
 import com.neel.syntaxvalidation.validator.AbstractLanguageValidator;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Validates Java source code using a two-phase, non-executing strategy.
@@ -41,6 +46,10 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
 
     /** The bare binary name searched on {@code PATH}. */
     static final String BINARY_NAME = "javac";
+
+    /** Pattern to extract the public class name from Java source code. */
+    private static final Pattern PUBLIC_CLASS_PATTERN =
+            Pattern.compile("public\\s+class\\s+(\\w+)");
 
     private static final JavacOutputParser PARSER = new JavacOutputParser();
     private static final JavaSyntaxEngine ENGINE = new JavaSyntaxEngine();
@@ -105,8 +114,24 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
                             + "javac not available for deeper analysis).");
         }
 
-        // javac available — delegate to the full pipeline for maximum coverage.
-        return super.validate(safeContent);
+        // javac available — strip 'public' from class declarations to avoid
+        // "class X is public, should be declared in a file named X.java" errors
+        // when validating with temp files that have generic names.
+        String javacContent = stripPublicModifier(safeContent);
+        return super.validate(javacContent);
+    }
+
+    /**
+     * Strips the 'public' modifier from class declarations in Java source code.
+     * This prevents javac from reporting "class X is public, should be declared in a file named X.java" errors
+     * when validating with temp files that have generic names.
+     *
+     * @param content the Java source code
+     * @return the modified source code with 'public' removed from class declarations
+     */
+    private String stripPublicModifier(String content) {
+        // Replace "public class" with "class" (handles various whitespace patterns)
+        return content.replaceAll("(?m)^\\s*public\\s+class\\s+", "class ");
     }
 
     /**
@@ -128,6 +153,40 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
     @Override
     protected String getFileExtension() {
         return ".java";
+    }
+
+    /**
+     * Creates a temp file with a name derived from the public class in the content.
+     * If no public class is found, falls back to the default temp file creation.
+     * This ensures javac doesn't report "class X is public, should be declared in a file named X.java" errors.
+     *
+     * @param content the Java source content to extract the public class name from
+     * @return the path to the created temp file
+     * @throws IOException if an I/O error occurs
+     */
+    protected Path createTempFile(String content) throws IOException {
+        String publicClassName = extractPublicClassName(content);
+        if (publicClassName != null) {
+            // Create temp file with the public class name to satisfy javac's requirement
+            Path tempDir = Files.createTempDirectory("java-syntax-check-");
+            return tempDir.resolve(publicClassName + ".java");
+        } else {
+            // No public class — use default temp file creation
+            return createTempFile();
+        }
+    }
+
+    /**
+     * Extracts the public class name from Java source code.
+     * @param content the Java source code
+     * @return the public class name, or null if no public class found
+     */
+    private String extractPublicClassName(String content) {
+        Matcher matcher = PUBLIC_CLASS_PATTERN.matcher(content);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return null;
     }
 
     @Override

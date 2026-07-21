@@ -202,7 +202,7 @@ F:\code-helper-mcp-library-java\
 
 | File | Summary |
 |---|---|
-| `Language.java` | Enum with values: `JAVASCRIPT`, `CSS`, `HTML`, `PHP`, `TYPESCRIPT`, `PYTHON`, `JAVA`. Each value carries its file extensions and a display name. Provides `fromExtension(String)` for filename→language mapping. `TYPESCRIPT` and `PYTHON` are placeholders for future validators. |
+| `Language.java` | Enum with values: `JAVASCRIPT`, `CSS`, `HTML`, `PHP`, `TYPESCRIPT`, `PYTHON`, `JAVA`. Each value carries its file extensions and a display name. Provides `fromExtension(String)` for filename→language mapping. `TYPESCRIPT` is a placeholder; `PYTHON` is fully implemented with complete validator, lexer, parser, syntax engine, and output parser. |
 | `ModificationRequest.java` | Immutable descriptor: `startLine`, `endLine`, `newContent`, optional `description`. All indices are 1-based and inclusive. |
 | `ValidationResult.java` | Immutable outcome: `boolean valid`, `String message`, `List<ValidationError> errors`. Provides factory methods `valid(msg)` and `invalid(msg, errors)`. |
 | `ValidationError.java` | Immutable diagnostic: `int line`, `int column`, `String message`, `String toolOutput` (nullable). |
@@ -213,7 +213,7 @@ F:\code-helper-mcp-library-java\
 |---|---|
 | `LanguageValidator.java` | Interface: `getLanguage()`, `validateSource(String)`, `validateFile(Path)` |
 | `AbstractLanguageValidator.java` | Base class implementing the external-tool-first, pure-Java-fallback pattern. Uses `BinaryResolver` to check for external tool, `ProcessExecutor` to run it, and delegates to a `*SyntaxEngine` for the fallback. |
-| `ValidatorFactory.java` | Resolves `Language → LanguageValidator`. Maintains a map of all registered validators (JavaScript, CSS, HTML, PHP, Java). Also provides `getMixedContentValidator()` for mixed HTML/PHP content. |
+| `ValidatorFactory.java` | Resolves `Language → LanguageValidator`. Maintains a map of all registered validators (JavaScript, CSS, HTML, PHP, Java, Python). Also provides `getMixedContentValidator()` for mixed HTML/PHP content. |
 
 ### 4.4 JavaScript Validator
 
@@ -262,7 +262,19 @@ F:\code-helper-mcp-library-java\
 | `checker/DelimiterBalanceChecker.java` | Validates balanced `()`, `{}`, `[]` nesting across the token stream. Tracks opening delimiters on a stack and detects: unclosed delimiters, mismatched closers, and stray closing delimiters. Skips `COMMENT` and `STRING`/`CHAR` tokens. |
 | `checker/KeywordUsageChecker.java` | Validates correct usage of Java keywords and modifiers: `package`, `import`, class/interface/enum/record declarations, method signatures, control structures, and modifier placement. Ensures statement completeness (missing semicolons, unclosed blocks). |
 
-### 4.9 Mixed Content Validator
+### 4.9 Python Validator
+
+| File | Summary |
+|---|---|
+| `PythonValidator.java` | Extends `AbstractLanguageValidator`. External tool: `python3`. Two-phase validation: (1) pure-Java `PythonSyntaxEngine` for instant feedback, (2) `python3` fallback for deep semantic checks if no syntax errors found. |
+| `PythonSyntaxEngine.java` | Pure-Java syntax engine. Runs `PythonLexer` → `PythonParser` → structural validation. Validates: indentation consistency, bracket balance, grammar rules, block structure, and common Python patterns. |
+| `PythonLexer.java` | Hand-written, dependency-free lexical analyser for Python 3.14. Tokenises: keywords (35 Python keywords), identifiers, numeric literals (decimal, hex, octal, binary, floats, complex, underscores), string literals (all prefixes: `b`, `r`, `f`, `u`, `rb`, `br`, `rf`, `fr`, `t`, etc.), f-string expressions, operators, punctuation, decorators, and error recovery. Emits `PythonToken` list with accurate line/column tracking. |
+| `PythonParser.java` | Structural parser that validates Python code structure. Checks: indentation consistency, bracket/brace/parenthesis balance, block structure (def, class, if, for, while, try, with, etc.), common syntax errors, and statement completeness. |
+| `PythonToken.java` | Immutable record: `PythonTokenType type`, `String text`, `int line`, `int column`. Compact constructor validates non-null type/text and line/column ≥ 1. |
+| `PythonTokenType.java` | Enum with 78 values covering: keywords (35 types), identifiers, numeric types (4), string types (6), operators (17), punctuation (5), decorators, comments, newlines, indentation, errors, and EOF. |
+| `PythonOutputParser.java` | Parses `python3 -m py_compile` error output into `ValidationResult`. Extracts file, line, column, and message from Python's diagnostic format. |
+
+### 4.10 Mixed Content Validator
 
 | File | Summary |
 |---|---|
@@ -271,7 +283,7 @@ F:\code-helper-mcp-library-java\
 | `HtmlContentExtractor.java` | Regex-based extractor that locates `<style>`, `<script>`, and `<?php … ?>` blocks in HTML/PHP documents. Tracks original line numbers for error remapping. Handles: multi-line opening tags, empty blocks, legacy HTML comment wrappers, case-insensitive tags, PHP short open tags, XML processing instruction exclusion. |
 | `ExtractedBlock.java` | Immutable record: `Language language`, `String content`, `int startLine`, `int contentStartLine`, `int contentStartColumn`, `int contentEndLine`. Provides `mapToOriginalLine(int)` for line number remapping. |
 
-### 4.9 Process / Binary Layer
+### 4.11 Process / Binary Layer
 
 | File | Summary |
 |---|---|
@@ -279,14 +291,14 @@ F:\code-helper-mcp-library-java\
 | `ProcessResult.java` | Immutable record: `int exitCode`, `String stdout`, `String stderr`. |
 | `BinaryResolver.java` | Resolves external tool paths via environment variables, PATH lookup, and common installation directories. Returns `Optional<Path>`. |
 
-### 4.10 Cache Layer
+### 4.12 Cache Layer
 
 | File | Summary |
 |---|---|
 | `FileCache.java` | In-memory cache keyed by `Path`. Stores `FileCacheEntry` snapshots. Thread-safe. |
 | `FileCacheEntry.java` | Immutable snapshot: `List<String> lines`, `String content`, `String hash`, `long timestamp`. |
 
-### 4.11 Modification Layer
+### 4.13 Modification Layer
 
 | File | Summary |
 |---|---|
@@ -351,6 +363,12 @@ For mixed-content files (HTML/PHP with embedded CSS/JS/PHP):
   - `KeywordUsageChecker` — validates keyword/modifier placement: `package`, `import`, class/interface/enum/record declarations, method signatures, control structures, modifier ordering, statement completeness.
 - **External tool fallback**: `JavaValidator` attempts pure-Java validation first (instant feedback). If no syntax errors and `javac` binary is available, runs `javac -Xlint:all` for deep semantic checks and parses output via `JavacOutputParser`.
 
+### Python (`PythonLexer` + `PythonSyntaxEngine`)
+- **Lexer** (`PythonLexer`): Hand-written, dependency-free Python 3.14 lexer. Supports: 35 keywords (incl. `match`, `case`, `type` soft keyword), identifiers, numeric literals (decimal, hex `0x`, octal `0o`, binary `0b`, floats with exponents, complex `j`, underscore separators), string literals with all prefixes (`b`, `r`, `f`, `u`, `rb`, `br`, `rf`, `fr`, `t`, etc.), f-string expressions, operators (including `:=` walrus operator, `**`, `//`, `@` matrix multiply), decorators (`@`), comments (`#`), and indentation tracking.
+- **Token model**: `PythonToken` record (type, text, line, column) with `PythonTokenType` enum (78 values: 35 keywords, 4 numeric types, 6 string types, 17 operators, 5 punctuation types, decorators, comments, newlines, indentation, errors, EOF).
+- **Parser** (`PythonParser`): Structural parser that validates: indentation consistency, bracket/brace/parenthesis balance, block structure (def, class, if/elif/else, for, while, try/except/finally, with, match/case), common syntax errors, and statement completeness.
+- **External tool fallback**: `PythonValidator` attempts pure-Java validation first (instant feedback). If no syntax errors and `python3` binary is available, runs `python3 -m py_compile` for deep semantic checks and parses output via `PythonOutputParser`.
+
 ### Mixed Content (`MixedContentSyntaxEngine`)
 - **Extraction**: Locates `<style>`, `<script>`, and `<?php … ?>` blocks via regex.
 - **Validation**: Delegates to the appropriate sub-engine for each block type.
@@ -409,8 +427,8 @@ validators.put(Language.JAVA, new JavaValidator());
 // MixedContentValidator is NOT registered by Language key — it is
 // accessible via ValidatorFactory.getMixedContentValidator() for
 // HTML/PHP files that contain embedded CSS, JS, or PHP blocks.
-// TYPESCRIPT and PYTHON are placeholder enum values with no registered
-// validator yet.
+// TYPESCRIPT is a placeholder enum value with no registered validator yet.
+// PYTHON is fully implemented with PythonValidator.
 ```
 
 ### Singleton Syntax Engines
@@ -551,7 +569,7 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 
 - **Java validator has a modular architecture** — `JavaValidator` → `JavaSyntaxEngine` → `JavaLexer` + `SyntaxChecker` pipeline (3 default checkers: `TokenizationErrorChecker`, `DelimiterBalanceChecker`, `KeywordUsageChecker`). New checkers can be plugged in via the `SyntaxChecker` functional interface.
 - **`JavaValidator` uses two-phase validation** — phase 1 runs the pure-Java `JavaSyntaxEngine` for instant feedback; phase 2 runs `javac` (if available) for deep semantic checks. Phase 2 only runs when phase 1 finds no syntax errors.
-- **`TYPESCRIPT` and `PYTHON` are placeholder enum values** — `Language.TYPESCRIPT` and `Language.PYTHON` exist for extension mapping, but no validators are registered yet. `ValidatorFactory.get(Language.TYPESCRIPT)` returns `Optional.empty()`.
+- **`TYPESCRIPT` is a placeholder enum value** — `Language.TYPESCRIPT` exists for extension mapping, but no validator is registered yet. `ValidatorFactory.get(Language.TYPESCRIPT)` returns `Optional.empty()`. `PYTHON` is fully implemented with a complete validator (`PythonValidator`), lexer (`PythonLexer`), parser (`PythonParser`), syntax engine (`PythonSyntaxEngine`), and output parser (`PythonOutputParser`).
 - **External tools are optional** — the library works fully offline with pure-Java engines.
 - **File cache is in-memory** — not persisted across JVM restarts.
 - **ModificationApplier operates in-memory** — never writes to disk.
