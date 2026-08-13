@@ -28,7 +28,7 @@ text), the library:
 | PHP         | `PHP`         | `.php`, `.phtml`, `.phps`     | `php -l`           | **Complete**|
 | Java        | `JAVA`        | `.java`                       | `javac`            | **Complete**|
 | Python      | `PYTHON`      | `.py`                         | `python3`          | **Complete**|
-| TypeScript  | `TYPESCRIPT`  | `.ts`                         | —                  | Placeholder |
+| TypeScript  | `TYPESCRIPT`  | `.ts`, `.tsx`, `.jsx`          | `tsc` (optional)   | **Complete**|
 
 ### Mixed Content Support
 
@@ -245,6 +245,10 @@ com.neel.syntaxvalidation
     │   ├── PythonParser             # structural parser
     │   ├── PythonToken / PythonTokenType
     │   └── PythonOutputParser
+    ├── typescript/
+    │   ├── TypeScriptValidator      # tsc (optional, two-phase)
+    │   ├── TypeScriptSyntaxEngine   # pure-Java fallback
+    │   └── TscOutputParser          # tsc diagnostic parsing
     └── mixed/
         ├── MixedContentValidator    # HTML/PHP with embedded CSS/JS/PHP
         ├── MixedContentSyntaxEngine # orchestrates all sub-engines
@@ -274,6 +278,7 @@ Every language has a **zero-dependency, pure-Java fallback engine** that runs wh
 | PHP | `PhpSyntaxEngine` | Full PHP 8.3+ support, classes/interfaces/traits/enums, attributes, match expressions |
 | Java | `JavaSyntaxEngine` | Modular checker pipeline: tokenization, delimiter balance, keyword usage |
 | Python | `PythonSyntaxEngine` | Python 3.14 lexer + parser, indentation-aware validation |
+| TypeScript | `TypeScriptSyntaxEngine` | Token-based scan, delimiter balance, JSX tag matching, template literals |
 | Mixed | `MixedContentSyntaxEngine` | Orchestrates all engines with line-number remapping |
 
 ## Building & testing
