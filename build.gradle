@@ -30,6 +30,10 @@ dependencies {
     // Logging API – compile-only facade; consumers provide their own SLF4J implementation.
     compileOnly "org.slf4j:slf4j-api:${slf4jVersion}"
 
+    // Archive extraction (tar.gz, tar.xz) – used by BinaryManager
+    implementation 'org.apache.commons:commons-compress:1.27.1'
+    runtimeOnly 'org.tukaani:xz:1.10'
+
     testImplementation "org.slf4j:slf4j-nop:${slf4jVersion}"
     testImplementation platform("org.junit:junit-bom:${junitVersion}")
     testImplementation 'org.junit.jupiter:junit-jupiter'
@@ -89,7 +93,7 @@ tasks.named('test') {
     useJUnitPlatform()
     testLogging {
         events 'passed', 'skipped', 'failed'
-        showStandardStreams = false
+        showStandardStreams = true
         exceptionFormat = 'full'
     }
     finalizedBy jacocoTestReport
