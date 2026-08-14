@@ -31,8 +31,11 @@ dependencies {
     compileOnly "org.slf4j:slf4j-api:${slf4jVersion}"
 
     // Archive extraction (tar.gz, tar.xz) – used by BinaryManager
-    implementation 'org.apache.commons:commons-compress:1.27.1'
+    implementation 'org.apache.commons:commons-compress:1.28.0'
     runtimeOnly 'org.tukaani:xz:1.10'
+
+    // SLF4J implementation for standalone application (fat JAR)
+    runtimeOnly "org.slf4j:slf4j-simple:${slf4jVersion}"
 
     testImplementation "org.slf4j:slf4j-nop:${slf4jVersion}"
     testImplementation platform("org.junit:junit-bom:${junitVersion}")
@@ -104,3 +107,23 @@ tasks.named('javadoc') {
         encoding = 'UTF-8'
     }
 }
+
+
+// Fat JAR (all classifier) – bundles all runtime dependencies into a single archive
+tasks.register('shadowJar', Jar) {
+    archiveClassifier.set('all')
+    archiveBaseName.set('syntax-validation')
+    archiveVersion.set('1.0.0')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    manifest {
+        attributes 'Implementation-Title': 'syntax-validation',
+                   'Implementation-Version': '1.0.0'
+    }
+}
+
+build.dependsOn shadowJar
