@@ -186,6 +186,10 @@ public final class BinaryInfo {
         if ("vnu".equals(id)) {
             return installDir.resolve("vnu.jar");
         }
+        if ("javac".equals(id)) {
+            // JDK installs with bin/ subdirectory structure
+            return installDir.resolve("bin").resolve(isWindows() ? windowsExecutable : commandName);
+        }
         if (isWindows()) {
             return installDir.resolve(windowsExecutable);
         }

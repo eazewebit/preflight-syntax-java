@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
@@ -84,7 +85,7 @@ public class BinaryManager {
     private static final int CONNECT_TIMEOUT_MS = 15_000;
     private static final int READ_TIMEOUT_MS = 60_000;
 
-    private static final Pattern SEMVER_PATTERN = Pattern.compile("(\\d+)\\.(\\d+)(?:\\.(\\d+))?");
+    private static final Pattern SEMVER_PATTERN = Pattern.compile("(\\d+)(?:\\.(\\d+))?(?:\\.(\\d+))?");
 
     private final Path installDir;
     private final List<DownloadProgressListener> listeners = new CopyOnWriteArrayList<>();
@@ -159,15 +160,15 @@ public class BinaryManager {
 
         BinaryStatus.Builder builder = BinaryStatus.builder(info);
 
-        // --- 1. Try local installation dir first ---
-        Path localPath = info.getInstalledPath(installDir);
-        Path resolvedPath = null;
+        // --- 1. Try system PATH first ---
+        Path resolvedPath = resolveFromPath(info);
 
-        if (Files.isRegularFile(localPath)) {
-            resolvedPath = localPath;
-        } else {
-            // --- 2. Try system PATH ---
-            resolvedPath = resolveFromPath(info);
+        if (resolvedPath == null) {
+            // --- 2. Fall back to local installation dir ---
+            Path localPath = info.getInstalledPath(installDir);
+            if (Files.isRegularFile(localPath)) {
+                resolvedPath = localPath;
+            }
         }
 
         if (resolvedPath == null) {
@@ -290,24 +291,32 @@ public class BinaryManager {
 
         // Determine archive type
         String fileName = url.substring(url.lastIndexOf('/') + 1);
+        // If the URL has no recognizable extension (e.g. redirect URLs like
+        // Adoptium's ".../eclipse"), use a generic name and detect type by magic bytes
+        if (!fileName.contains(".")) {
+            fileName = info.getId() + "-download";
+        }
         Path downloadTarget = installDir.resolve(fileName);
 
         // Download
         downloadFile(url, downloadTarget, info.getId());
 
+        // Detect archive type: prefer file extension, fall back to magic bytes
+        String archiveType = detectArchiveType(downloadTarget, fileName, url);
+
         // Extract if it's an archive
-        if (fileName.endsWith(".zip") || fileName.endsWith(".jar_") || url.contains("vnu.jar_")) {
+        if ("zip".equals(archiveType)) {
             fireExtractStart(info.getId(), downloadTarget.toString());
             extractZip(downloadTarget, installDir);
             fireExtractComplete(info.getId(), installDir.toString());
             // Clean up the archive
             Files.deleteIfExists(downloadTarget);
-        } else if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz")) {
+        } else if ("tar.gz".equals(archiveType)) {
             fireExtractStart(info.getId(), downloadTarget.toString());
             extractTarGz(downloadTarget, installDir);
             fireExtractComplete(info.getId(), installDir.toString());
             Files.deleteIfExists(downloadTarget);
-        } else if (fileName.endsWith(".tar.xz")) {
+        } else if ("tar.xz".equals(archiveType)) {
             fireExtractStart(info.getId(), downloadTarget.toString());
             extractTarXz(downloadTarget, installDir);
             fireExtractComplete(info.getId(), installDir.toString());
@@ -522,6 +531,52 @@ public class BinaryManager {
         }
     }
 
+    /**
+     * Detects the archive type of a downloaded file.
+     *
+     * <p>Prefers the file extension; falls back to magic-byte inspection for
+     * URLs that redirect to archives without a recognizable extension
+     * (e.g. Adoptium's {@code .../eclipse} endpoint).
+     *
+     * @param file     the downloaded file.
+     * @param fileName the file name derived from the URL.
+     * @param url      the original download URL.
+     * @return {@code "zip"}, {@code "tar.gz"}, {@code "tar.xz"}, or {@code null}
+     *         if the file is not a recognized archive.
+     * @throws IOException if the file cannot be read.
+     */
+    private String detectArchiveType(Path file, String fileName, String url) throws IOException {
+        // Check extension first
+        if (fileName.endsWith(".zip") || fileName.endsWith(".jar_") || url.contains("vnu.jar_")) {
+            return "zip";
+        }
+        if (fileName.endsWith(".tar.gz") || fileName.endsWith(".tgz")) {
+            return "tar.gz";
+        }
+        if (fileName.endsWith(".tar.xz")) {
+            return "tar.xz";
+        }
+        // Fall back to magic bytes
+        byte[] header = new byte[4];
+        try (InputStream in = Files.newInputStream(file)) {
+            int read = in.read(header);
+            if (read < 4) return null;
+        }
+        // ZIP: 50 4B 03 04
+        if (header[0] == 0x50 && header[1] == 0x4B && header[2] == 0x03 && header[3] == 0x04) {
+            return "zip";
+        }
+        // GZIP: 1F 8B
+        if (header[0] == (byte) 0x1F && header[1] == (byte) 0x8B) {
+            return "tar.gz";
+        }
+        // XZ: FD 37
+        if (header[0] == (byte) 0xFD && header[1] == 0x37) {
+            return "tar.xz";
+        }
+        return null;
+    }
+
     // ====================================================================
     //  Internal: extraction
     // ====================================================================
@@ -605,18 +660,45 @@ public class BinaryManager {
             ProcessBuilder pb = new ProcessBuilder(whichCmd, cmd)
                     .redirectErrorStream(true);
             Process p = pb.start();
-            String path;
+            List<String> paths = new ArrayList<>();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                path = reader.readLine();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    paths.add(line);
+                }
             }
             int exitCode = p.waitFor();
-            // Only accept the result if the exit code is 0 and the path looks valid
-            if (exitCode == 0 && path != null && !path.isBlank()
-                    && !path.startsWith("INFO:") && !path.contains("Could not find")) {
-                Path resolved = Path.of(path.trim());
-                if (Files.isExecutable(resolved)) {
-                    return resolved;
+            // Only accept the result if the exit code is 0 and paths were found
+            if (exitCode == 0 && !paths.isEmpty()) {
+                // Collect all valid executable candidates
+                List<Path> candidates = new ArrayList<>();
+                for (String path : paths) {
+                    if (path == null || path.isBlank()
+                            || path.startsWith("INFO:") || path.contains("Could not find")) {
+                        continue;
+                    }
+                    Path resolved = Path.of(path.trim());
+                    if (Files.isExecutable(resolved)) {
+                        candidates.add(resolved);
+                    }
+                }
+                if (!candidates.isEmpty()) {
+                    if (candidates.size() == 1) {
+                        return candidates.get(0);
+                    }
+                    // Multiple candidates: prefer the one with the highest version
+                    Path best = candidates.get(0);
+                    String bestVersion = detectVersion(info, best);
+                    for (int i = 1; i < candidates.size(); i++) {
+                        String v = detectVersion(info, candidates.get(i));
+                        if (v != null && (bestVersion == null
+                                || compareVersions(v, bestVersion) > 0)) {
+                            best = candidates.get(i);
+                            bestVersion = v;
+                        }
+                    }
+                    return best;
                 }
             }
         } catch (IOException | InterruptedException e) {
@@ -661,6 +743,7 @@ public class BinaryManager {
                 String major = matcher.group(1);
                 String minor = matcher.group(2);
                 String patch = matcher.group(3);
+                if (minor == null) { return major + ".0.0"; }
                 return major + "." + minor + (patch != null ? "." + patch : ".0");
             }
         } catch (IOException | InterruptedException e) {
@@ -687,6 +770,7 @@ public class BinaryManager {
                 String major = matcher.group(1);
                 String minor = matcher.group(2);
                 String patch = matcher.group(3);
+                if (minor == null) { return major + ".0.0"; }
                 return major + "." + minor + (patch != null ? "." + patch : ".0");
             }
         } catch (IOException | InterruptedException e) {
@@ -737,6 +821,21 @@ public class BinaryManager {
     }
 
     private Path findInSubdirectory(BinaryInfo info) {
+        if ("javac".equals(info.getId())) {
+            // JDK archives extract into jdk-XX+XX/ or jdk-XX.X.X+XX/
+            // The javac executable is at <subdir>/bin/javac.exe (Windows) or <subdir>/bin/javac (Unix)
+            String execName = isWindows() ? info.getWindowsExecutable() : info.getCommandName();
+            try (var stream = Files.list(installDir)) {
+                return stream.filter(p -> Files.isDirectory(p)
+                                && p.getFileName().toString().startsWith("jdk"))
+                        .map(d -> d.resolve("bin").resolve(execName))
+                        .filter(Files::isRegularFile)
+                        .findFirst()
+                        .orElse(null);
+            } catch (IOException e) {
+                return null;
+            }
+        }
         if ("node".equals(info.getId())) {
             // Node archives extract into node-vXX.XX.XX-{os}-{arch}/
             try (var stream = Files.list(installDir)) {
@@ -760,11 +859,12 @@ public class BinaryManager {
     }
 
     private void reorganizeExtracted(BinaryInfo info, Path foundExecutable) throws IOException {
-        // For Node.js archives: move contents from subdirectory to installDir
-        if ("node".equals(info.getId())) {
+        // For Node.js and JDK archives: move contents from subdirectory to installDir
+        if ("node".equals(info.getId()) || "javac".equals(info.getId())) {
             try (var stream = Files.list(installDir)) {
+                String prefix = "javac".equals(info.getId()) ? "jdk-" : "node-";
                 Optional<Path> nodeDir = stream.filter(p -> Files.isDirectory(p)
-                                && p.getFileName().toString().startsWith("node-"))
+                                && p.getFileName().toString().startsWith(prefix))
                         .findFirst();
                 if (nodeDir.isPresent()) {
                     Path src = nodeDir.get();
