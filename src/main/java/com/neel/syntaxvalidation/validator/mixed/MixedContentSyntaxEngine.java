@@ -3,10 +3,13 @@ package com.neel.syntaxvalidation.validator.mixed;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationError;
 import com.neel.syntaxvalidation.model.ValidationResult;
+import com.neel.syntaxvalidation.validator.LanguageValidator;
 import com.neel.syntaxvalidation.validator.css.CssSyntaxEngine;
 import com.neel.syntaxvalidation.validator.html.HtmlSyntaxEngine;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptSyntaxEngine;
 import com.neel.syntaxvalidation.validator.php.PhpSyntaxEngine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,22 +22,32 @@ import java.util.stream.Collectors;
  *
  * <p>This engine orchestrates validation across four dimensions:
  * <ol>
- *   <li><b>HTML structure</b> &mdash; delegates to {@link HtmlSyntaxEngine} for
- *       structural HTML validation (optionally via the external vnu.jar).</li>
+ *   <li><b>HTML structure</b> &mdash; delegates to an {@link HtmlSyntaxEngine} or
+ *       a binary-backed {@link LanguageValidator} (e.g. vnu.jar) for
+ *       structural HTML validation.</li>
  *   <li><b>Embedded CSS</b> &mdash; uses {@link HtmlContentExtractor} to locate
- *       {@code &lt;style&gt;} blocks, then validates each block via
- *       {@link CssSyntaxEngine}.</li>
+ *       {@code &lt;style&gt;} blocks, then validates each block via a CSS
+ *       {@link LanguageValidator} (e.g. stylelint) or the built-in engine.</li>
  *   <li><b>Embedded JavaScript</b> &mdash; uses {@link HtmlContentExtractor} to
- *       locate {@code &lt;script&gt;} blocks, then validates each block via
- *       {@link JavaScriptSyntaxEngine}.</li>
+ *       locate {@code &lt;script&gt;} blocks, then validates each block via a
+ *       JavaScript {@link LanguageValidator} (e.g. node --check) or the built-in
+ *       engine.</li>
  *   <li><b>Embedded PHP</b> &mdash; uses {@link HtmlContentExtractor} to
- *       locate {@code &lt;?php … ?&gt;} blocks, then validates each block via
- *       {@link PhpSyntaxEngine}.</li>
+ *       locate {@code &lt;?php … ?&gt;} blocks, then validates each block via a
+ *       PHP {@link LanguageValidator} (e.g. php -l) or the built-in engine.</li>
  * </ol>
  *
  * <p>Error line numbers from embedded content are remapped to the correct
  * position in the original HTML document using
  * {@link ExtractedBlock#mapToOriginalLine(int)}.
+ *
+ * <h2>Binary-first strategy</h2>
+ * <p>When binary-backed {@link LanguageValidator} instances are supplied (via
+ * {@link #MixedContentSyntaxEngine(LanguageValidator, LanguageValidator, LanguageValidator, LanguageValidator)}),
+ * the engine uses them for validation, which provides the full binary-first
+ * strategy (e.g. vnu.jar for HTML, stylelint for CSS, node --check for JS,
+ * php -l for PHP). When validators are not supplied, the engine falls back to
+ * the pure-Java built-in engines.</p>
  *
  * <h2>Design notes</h2>
  * <ul>
@@ -48,14 +61,23 @@ import java.util.stream.Collectors;
  */
 public final class MixedContentSyntaxEngine {
 
+    private static final Logger log = LoggerFactory.getLogger(MixedContentSyntaxEngine.class);
+
     private final HtmlSyntaxEngine htmlEngine;
     private final CssSyntaxEngine cssEngine;
     private final JavaScriptSyntaxEngine jsEngine;
     private final PhpSyntaxEngine phpEngine;
     private final HtmlContentExtractor extractor;
 
+    /** Binary-backed validators (may be null for pure-Java fallback). */
+    private final LanguageValidator htmlValidator;
+    private final LanguageValidator cssValidator;
+    private final LanguageValidator jsValidator;
+    private final LanguageValidator phpValidator;
+
     /**
-     * Creates a new mixed-content engine using default singleton sub-engines.
+     * Creates a new mixed-content engine using default singleton sub-engines
+     * (pure-Java fallback only, no binary-backed validators).
      */
     public MixedContentSyntaxEngine() {
         this(HtmlSyntaxEngine.getInstance(),
@@ -66,7 +88,8 @@ public final class MixedContentSyntaxEngine {
     }
 
     /**
-     * Creates a new mixed-content engine with custom sub-engines.
+     * Creates a new mixed-content engine with custom sub-engines (pure-Java
+     * fallback only, no binary-backed validators).
      *
      * @param htmlEngine the engine for HTML structural validation.
      * @param cssEngine  the engine for CSS syntax validation.
@@ -85,6 +108,37 @@ public final class MixedContentSyntaxEngine {
         this.jsEngine = jsEngine != null ? jsEngine : JavaScriptSyntaxEngine.getInstance();
         this.phpEngine = phpEngine != null ? phpEngine : PhpSyntaxEngine.getInstance();
         this.extractor = extractor != null ? extractor : HtmlContentExtractor.getInstance();
+        this.htmlValidator = null;
+        this.cssValidator = null;
+        this.jsValidator = null;
+        this.phpValidator = null;
+    }
+
+    /**
+     * Creates a new mixed-content engine backed by binary-first
+     * {@link LanguageValidator} instances. When a validator is non-null, it is
+     * used for that language's validation (which internally tries a binary
+     * first, then falls back to a built-in engine). When a validator is null,
+     * the corresponding built-in engine is used directly.
+     *
+     * @param htmlValidator binary-backed HTML validator (e.g. {@code HtmlValidator} backed by vnu.jar), or null.
+     * @param cssValidator  binary-backed CSS validator (e.g. {@code CssValidator} backed by stylelint), or null.
+     * @param jsValidator   binary-backed JS validator (e.g. {@code JavaScriptValidator} backed by node), or null.
+     * @param phpValidator  binary-backed PHP validator (e.g. {@code PhpValidator} backed by php), or null.
+     */
+    public MixedContentSyntaxEngine(LanguageValidator htmlValidator,
+                                     LanguageValidator cssValidator,
+                                     LanguageValidator jsValidator,
+                                     LanguageValidator phpValidator) {
+        this.htmlEngine = HtmlSyntaxEngine.getInstance();
+        this.cssEngine = CssSyntaxEngine.getInstance();
+        this.jsEngine = JavaScriptSyntaxEngine.getInstance();
+        this.phpEngine = PhpSyntaxEngine.getInstance();
+        this.extractor = HtmlContentExtractor.getInstance();
+        this.htmlValidator = htmlValidator;
+        this.cssValidator = cssValidator;
+        this.jsValidator = jsValidator;
+        this.phpValidator = phpValidator;
     }
 
     /**
@@ -95,10 +149,10 @@ public final class MixedContentSyntaxEngine {
      * <ol>
      *   <li>Extract embedded {@code &lt;style&gt;}, {@code &lt;script&gt;}, and
      *       {@code &lt;?php … ?&gt;} blocks.</li>
-     *   <li>Validate the full HTML structure.</li>
-     *   <li>Validate each extracted CSS block.</li>
-     *   <li>Validate each extracted JavaScript block.</li>
-     *   <li>Validate each extracted PHP block.</li>
+     *   <li>Validate the full HTML structure (binary-first when validator available).</li>
+     *   <li>Validate each extracted CSS block (binary-first when validator available).</li>
+     *   <li>Validate each extracted JavaScript block (binary-first when validator available).</li>
+     *   <li>Validate each extracted PHP block (binary-first when validator available).</li>
      *   <li>Merge all errors, remapping embedded-content line numbers to the
      *       original HTML positions.</li>
      * </ol>
@@ -115,15 +169,16 @@ public final class MixedContentSyntaxEngine {
 
         // Stage 1: Extract embedded content blocks
         List<ExtractedBlock> blocks = extractor.extract(htmlSource);
+        log.debug("[MIXED-CONTENT] Extracted {} embedded content block(s)", blocks.size());
 
         // Stage 2: Validate the full HTML structure
-        ValidationResult htmlResult = htmlEngine.validate(htmlSource);
+        ValidationResult htmlResult = validateHtml(htmlSource);
 
         // Stage 3: Validate embedded CSS blocks
         List<ValidationResult> cssResults = new ArrayList<>();
         for (ExtractedBlock block : blocks) {
             if (block.language() == Language.CSS && !block.isEmpty()) {
-                ValidationResult cssResult = cssEngine.validate(block.content());
+                ValidationResult cssResult = validateCss(block.content());
                 if (!cssResult.isValid()) {
                     cssResults.add(remapLineNumbers(cssResult, block));
                 }
@@ -134,7 +189,7 @@ public final class MixedContentSyntaxEngine {
         List<ValidationResult> jsResults = new ArrayList<>();
         for (ExtractedBlock block : blocks) {
             if (block.language() == Language.JAVASCRIPT && !block.isEmpty()) {
-                ValidationResult jsResult = jsEngine.validate(block.content());
+                ValidationResult jsResult = validateJavaScript(block.content());
                 if (!jsResult.isValid()) {
                     jsResults.add(remapLineNumbers(jsResult, block));
                 }
@@ -145,7 +200,7 @@ public final class MixedContentSyntaxEngine {
         List<ValidationResult> phpResults = new ArrayList<>();
         for (ExtractedBlock block : blocks) {
             if (block.language() == Language.PHP && !block.isEmpty()) {
-                ValidationResult phpResult = phpEngine.validate(block.content());
+                ValidationResult phpResult = validatePhp(block.content());
                 if (!phpResult.isValid()) {
                     phpResults.add(remapLineNumbers(phpResult, block));
                 }
@@ -154,6 +209,102 @@ public final class MixedContentSyntaxEngine {
 
         // Stage 6: Merge all errors
         return mergeResults(htmlResult, cssResults, jsResults, phpResults);
+    }
+
+    /**
+     * Validates HTML content using the binary-backed validator when available,
+     * otherwise falls back to the built-in {@link HtmlSyntaxEngine}.
+     */
+    private ValidationResult validateHtml(String source) {
+        if (htmlValidator != null) {
+            log.info("╔══════════════════════════════════════════════════════════════");
+            log.info("║ [MIXED-CONTENT] HTML validation: Using BINARY-BACKED VALIDATOR");
+            log.info("║ Validator: {}", htmlValidator.getClass().getSimpleName());
+            log.info("║ Strategy: Binary-first (vnu.jar) with built-in fallback");
+            log.info("╚══════════════════════════════════════════════════════════════");
+            ValidationResult result = htmlValidator.validate(source);
+            log.debug("[MIXED-CONTENT] HTML validator result: valid={}", result.isValid());
+            return result;
+        }
+        log.info("╔══════════════════════════════════════════════════════════════");
+        log.info("║ [MIXED-CONTENT] HTML validation: Using BUILT-IN ENGINE ONLY");
+        log.info("║ Engine: {}", htmlEngine.getClass().getSimpleName());
+        log.info("║ Reason: No binary-backed HTML validator configured");
+        log.info("╚══════════════════════════════════════════════════════════════");
+        return htmlEngine.validate(source);
+    }
+
+    /**
+     * Validates CSS content using the binary-backed validator when available,
+     * otherwise falls back to the built-in {@link CssSyntaxEngine}.
+     */
+    private ValidationResult validateCss(String source) {
+        if (cssValidator != null) {
+            log.info("[MIXED-CONTENT] CSS block validation: Using BINARY-BACKED VALIDATOR ({})",
+                    cssValidator.getClass().getSimpleName());
+            return cssValidator.validate(source);
+        }
+        log.debug("[MIXED-CONTENT] CSS block validation: Using built-in engine ({})",
+                cssEngine.getClass().getSimpleName());
+        return cssEngine.validate(source);
+    }
+
+    /**
+     * Validates JavaScript content using the binary-backed validator when
+     * available, otherwise falls back to the built-in {@link JavaScriptSyntaxEngine}.
+     */
+    private ValidationResult validateJavaScript(String source) {
+        if (jsValidator != null) {
+            log.info("[MIXED-CONTENT] JavaScript block validation: Using BINARY-BACKED VALIDATOR ({})",
+                    jsValidator.getClass().getSimpleName());
+            return jsValidator.validate(source);
+        }
+        log.debug("[MIXED-CONTENT] JavaScript block validation: Using built-in engine ({})",
+                jsEngine.getClass().getSimpleName());
+        return jsEngine.validate(source);
+    }
+
+    /**
+     * Validates PHP content using the binary-backed validator when available,
+     * otherwise falls back to the built-in {@link PhpSyntaxEngine}.
+     */
+    private ValidationResult validatePhp(String source) {
+        if (phpValidator != null) {
+            log.info("[MIXED-CONTENT] PHP block validation: Using BINARY-BACKED VALIDATOR ({})",
+                    phpValidator.getClass().getSimpleName());
+            return phpValidator.validate(source);
+        }
+        log.debug("[MIXED-CONTENT] PHP block validation: Using built-in engine ({})",
+                phpEngine.getClass().getSimpleName());
+        return phpEngine.validate(source);
+    }
+
+    /**
+     * Returns whether a binary-backed HTML validator is configured.
+     */
+    public boolean hasHtmlValidator() {
+        return htmlValidator != null;
+    }
+
+    /**
+     * Returns whether a binary-backed CSS validator is configured.
+     */
+    public boolean hasCssValidator() {
+        return cssValidator != null;
+    }
+
+    /**
+     * Returns whether a binary-backed JS validator is configured.
+     */
+    public boolean hasJsValidator() {
+        return jsValidator != null;
+    }
+
+    /**
+     * Returns whether a binary-backed PHP validator is configured.
+     */
+    public boolean hasPhpValidator() {
+        return phpValidator != null;
     }
 
     /**

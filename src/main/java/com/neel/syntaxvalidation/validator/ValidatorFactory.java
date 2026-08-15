@@ -114,14 +114,18 @@ public final class ValidatorFactory {
         Objects.requireNonNull(language, "language");
         return newValidator(language);
     }
-
     /**
      * Returns a MixedContentValidator for HTML files containing embedded CSS and JavaScript.
+     *
+     * <p>When a {@link BinaryManager} is configured, the validator uses
+     * binary-backed validators (vnu.jar for HTML, stylelint for CSS,
+     * node for JS, php for PHP). Otherwise, pure-Java built-in engines
+     * are used.</p>
      *
      * @return a mixed-content validator
      */
     public MixedContentValidator getMixedContentValidator() {
-        return new MixedContentValidator();
+        return new MixedContentValidator(binaryManager);
     }
 
     /**
