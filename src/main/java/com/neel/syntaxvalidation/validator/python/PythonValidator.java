@@ -12,24 +12,29 @@ import com.neel.syntaxvalidation.validator.LanguageValidator;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * Validates Python source code using a two-phase, non-executing strategy.
+ * Validates Python source code using a two-phase, binary-first strategy.
  *
- * <h2>Phase 1 - built-in PythonSyntaxEngine (always runs)</h2>
- * A fast, dependency-free structural pass.
+ * <h2>Phase 1 - python3 deep analysis (when available)</h2>
+ * If a python3 binary is resolvable, the source is validated using ast.parse()
+ * so that the full Python parser can surface every grammar-level error.
+ * The code is never executed.
  *
- * <h2>Phase 2 - python3 deep analysis (when available)</h2>
- * If the pure-Java engine reports no errors and a python3 binary is resolvable,
- * the source is validated using ast.parse() so that the full Python parser
- * can surface every grammar-level error. The code is never executed.
- *
- * If the Python interpreter is unavailable, the clean result from phase 1 stands.
+ * <h2>Phase 2 - built-in PythonSyntaxEngine (fallback)</h2>
+ * If python3 is <em>not</em> available or execution fails, a fast,
+ * dependency-free structural pass runs as fallback.
  */
 public class PythonValidator extends AbstractLanguageValidator implements LanguageValidator {
 
     static final String BINARY_NAME = "python3";
+
+    /**
+     * Creates a validator that resolves python3 from the system PATH.
+     */
+    public PythonValidator() {
+        this(null, new BinaryResolver(), new ProcessExecutor());
+    }
 
     public PythonValidator(BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
         this(null, binaryResolver, processExecutor);
@@ -51,39 +56,35 @@ public class PythonValidator extends AbstractLanguageValidator implements Langua
     }
 
     @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
-
-        // Phase 1
-        ValidationResult engineResult = PythonSyntaxEngine.validate(safeContent);
-        if (!engineResult.isValid()) {
-            return engineResult;
-        }
-
-        // Phase 2
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            return ValidationResult.valid(
-                    "Python syntax is valid (validated by the built-in Python syntax engine; "
-                            + "python3 not available for deeper analysis).");
-        }
-
-        return super.validate(safeContent);
+    public Language getLanguage() {
+        return Language.PYTHON;
     }
 
     /**
-     * Validates a Python source string directly using only the built-in syntax engine.
+     * Built-in Python syntax engine fallback (Phase 2).
+     * This method is called by the base class when binary validation is
+     * unavailable or fails.
+     */
+    @Override
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        log.trace("[PHASE-2-FALLBACK] Using built-in PythonSyntaxEngine for validation");
+        ValidationResult engineResult = PythonSyntaxEngine.validate(content);
+        if (!engineResult.isValid()) {
+            log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
+        }
+        return engineResult;
+    }
+
+    /**
+     * Validates Python source code directly using the built-in engine.
+     * This method provides direct access to the built-in engine without
+     * going through the binary validation phase.
      *
      * @param source the Python source code to validate.
-     * @return the ValidationResult.
+     * @return ValidationResult from the built-in engine.
      */
     public ValidationResult validateSource(String source) {
         return PythonSyntaxEngine.validate(source == null ? "" : source);
-    }
-
-    @Override
-    public Language getLanguage() {
-        return Language.PYTHON;
     }
 
     @Override

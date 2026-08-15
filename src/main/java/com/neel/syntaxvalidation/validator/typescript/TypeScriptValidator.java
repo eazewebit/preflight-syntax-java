@@ -13,27 +13,23 @@ import com.neel.syntaxvalidation.validator.LanguageValidator;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Validates TypeScript ({@code .ts}), TSX ({@code .tsx}), and JSX ({@code .jsx}) source
- * code using a two-phase, non-executing strategy.
+ * code using a two-phase, binary-first strategy.
  *
- * <h2>Phase 1 &mdash; built-in {@link TypeScriptSyntaxEngine} (always runs)</h2>
- * A fast, dependency-free structural pass that tokenises the source and checks
- * for unbalanced delimiters, unclosed strings, and other obvious syntax errors.
- * This requires zero external dependencies.
+ * <h2>Phase 1 &mdash; {@code tsc} deep analysis (when available)</h2>
+ * If a {@code tsc} binary is resolvable &mdash; either from an explicitly
+ * supplied preferred path, from a {@link BinaryManager}, or from the system
+ * {@code PATH} &mdash; the source is validated using the TypeScript compiler
+ * with {@code --noEmit} for full type-aware syntax checking. The code is
+ * never executed.
  *
- * <h2>Phase 2 &mdash; {@code tsc} deep analysis (when available)</h2>
- * If the pure-Java engine reports no errors and a {@code tsc} binary is
- * resolvable &mdash; either from an explicitly supplied preferred path, from a
- * {@link BinaryManager}, or from the system {@code PATH} &mdash; the source
- * is validated using the TypeScript compiler with {@code --noEmit} for full
- * type-aware syntax checking. The code is never executed.
- *
- * <p>If the TypeScript compiler is unavailable, the clean result from
- * phase&nbsp;1 stands, ensuring the validator always provides a best-effort
- * answer.
+ * <h2>Phase 2 &mdash; built-in {@link TypeScriptSyntaxEngine} (fallback)</h2>
+ * If {@code tsc} is <em>not</em> available or execution fails, a fast,
+ * dependency-free structural pass runs as fallback. It tokenises the source
+ * and checks for unbalanced delimiters, unclosed strings, and other obvious
+ * syntax errors. This requires zero external dependencies.
  *
  * <p>This class is the public entry point for TypeScript validation and is
  * registered in the {@link com.neel.syntaxvalidation.validator.ValidatorFactory
@@ -139,55 +135,34 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
         }
     }
 
-    /**
-     * Two-phase validation.
-     *
-     * <ol>
-     *   <li>Run the built-in {@link TypeScriptSyntaxEngine}. If it reports errors,
-     *       return them immediately &mdash; no external process is needed.</li>
-     *   <li>If the engine passes and {@code tsc} is available, delegate to
-     *       {@code super.validate()} (which invokes {@code tsc --noEmit})
-     *       for deeper analysis.</li>
-     *   <li>If {@code tsc} is unavailable, the engine's clean result stands.</li>
-     * </ol>
-     */
     @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
-
-        // Auto-detect JSX content and enable JSX mode if needed.
-        // This allows the validator to handle .jsx and .tsx files properly.
-        if (jsxMode || containsJsxContent(safeContent)) {
-            syntaxEngine.enableJsxMode();
-        }
-
-        // Phase 1 — built-in TypeScript syntax engine (always runs, zero external deps)
-        ValidationResult engineResult = syntaxEngine.validate(safeContent);
-        if (!engineResult.isValid()) {
-            return engineResult;
-        }
-
-        // Phase 2 — tsc deep analysis (when available)
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            return ValidationResult.valid(
-                    "TypeScript syntax is valid (validated by the built-in TypeScript syntax engine; "
-                            + "tsc not available for deeper analysis).");
-        }
-
-        // External binary available — delegate to the full pipeline for maximum coverage.
-        try {
-            return super.validate(safeContent);
-        } catch (RuntimeException e) {
-            // External binary failed; fall back to Phase 1 result (already passed)
-            return ValidationResult.valid(
-                    "TypeScript syntax is valid (validated by the built-in TypeScript syntax engine; "
-                            + "tsc execution failed: " + e.getMessage() + ").");
-        }
+    public Language getLanguage() {
+        return Language.TYPESCRIPT;
     }
 
     /**
-     * Heuristically detect if the content contains JSX patterns.
+     * Built-in TypeScript syntax engine fallback (Phase 2).
+     * This method is called by the base class when binary validation is
+     * unavailable or fails.
+     */
+    @Override
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        log.trace("[PHASE-2-FALLBACK] Using built-in TypeScript syntax engine for validation");
+        
+        // Auto-detect JSX content and enable JSX mode if needed.
+        if (jsxMode || containsJsxContent(content)) {
+            syntaxEngine.enableJsxMode();
+        }
+        
+        ValidationResult engineResult = syntaxEngine.validate(content);
+        if (!engineResult.isValid()) {
+            log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
+        }
+        return engineResult;
+    }
+
+    /**
+     * Checks if the content contains JSX-like syntax patterns.
      * This allows automatic JSX mode activation for .jsx and .tsx files.
      */
     private static boolean containsJsxContent(String content) {
@@ -268,10 +243,5 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
         return "tsc binary not found. Install TypeScript globally (npm install -g typescript) "
                 + "or provide a path via the 'tsc.path' system property. "
                 + "Falling back to the built-in TypeScript syntax engine.";
-    }
-
-    @Override
-    public Language getLanguage() {
-        return Language.TYPESCRIPT;
     }
 }

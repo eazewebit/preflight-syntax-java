@@ -12,19 +12,17 @@ import com.neel.syntaxvalidation.validator.LanguageValidator;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * Validates HTML source code using a two-phase, non-executing strategy.
+ * Validates HTML source code using a two-phase, binary-first strategy.
  *
- * <h2>Phase 1 - built-in HtmlSyntaxEngine (always runs)</h2>
- * A fast, dependency-free structural pass.
+ * <h2>Phase 1 - vnu deep analysis (when available)</h2>
+ * If vnu is resolvable, the source is validated using the W3C's
+ * official HTML checker. The code is never executed.
  *
- * <h2>Phase 2 - vnu deep analysis (when available)</h2>
- * If the pure-Java engine reports no errors and vnu is resolvable,
- * the source is validated using the W3C's official HTML checker.
- *
- * If vnu is unavailable, the clean result from phase 1 stands.
+ * <h2>Phase 2 - built-in HtmlSyntaxEngine (fallback)</h2>
+ * If vnu is <em>not</em> available or execution fails, a fast,
+ * dependency-free structural pass runs as fallback.
  */
 public class HtmlValidator extends AbstractLanguageValidator implements LanguageValidator {
 
@@ -67,35 +65,23 @@ public class HtmlValidator extends AbstractLanguageValidator implements Language
     }
 
     @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
-
-        // Phase 1
-        ValidationResult engineResult = ENGINE.validate(safeContent);
-        if (!engineResult.isValid()) {
-            return engineResult;
-        }
-
-        // Phase 2
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            return ValidationResult.valid(
-                    "HTML syntax is valid (validated by the built-in HTML syntax engine; "
-                            + "vnu not available for deeper analysis).");
-        }
-
-        try {
-            return super.validate(safeContent);
-        } catch (RuntimeException e) {
-            return ValidationResult.valid(
-                    "HTML syntax is valid (validated by the built-in HTML syntax engine; "
-                            + "vnu execution failed: " + e.getMessage() + ").");
-        }
-    }
-
-    @Override
     public Language getLanguage() {
         return Language.HTML;
+    }
+
+    /**
+     * Built-in HTML syntax engine fallback (Phase 2).
+     * This method is called by the base class when binary validation is
+     * unavailable or fails.
+     */
+    @Override
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        log.trace("[PHASE-2-FALLBACK] Using built-in HTML syntax engine for validation");
+        ValidationResult engineResult = ENGINE.validate(content);
+        if (!engineResult.isValid()) {
+            log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
+        }
+        return engineResult;
     }
 
     @Override

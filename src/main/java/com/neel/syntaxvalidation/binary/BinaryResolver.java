@@ -80,24 +80,18 @@ public class BinaryResolver {
     }
 
     /**
-     * Legacy constructor kept for backward compatibility.
+     * Legacy resolution returning a String path.
      *
-     * @param preferredBinaryPath unused - retained for signature compatibility.
-     * @param binaryName          unused - retained for signature compatibility.
-     * @deprecated Use {@link #BinaryResolver()} or {@link #BinaryResolver(BinaryManager)}.
+     * @param preferredPath optional explicit path provided by the caller.
+     * @param binaryName    the canonical name of the binary to resolve.
+     * @return the resolved path, or {@link Optional#empty()} if not found.
      */
-    @Deprecated
-    public BinaryResolver(String preferredBinaryPath, String binaryName) {
-        this(null);
+    public Optional<String> resolve(String preferredPath, String binaryName) {
+        return resolvePath(preferredPath, binaryName).map(Path::toString);
     }
 
-    // ====================================================================
-    //  Public resolution API
-    // ====================================================================
-
     /**
-     * Resolves the binary path using the full pipeline: preferred path ->
-     * {@link BinaryManager} -> system {@code PATH}.
+     * Resolves the binary path with full {@link BinaryManager} support.
      *
      * <p>This is the <b>preferred</b> resolution method.  It returns a
      * {@link Path} which can be used directly by validators.
@@ -116,14 +110,14 @@ public class BinaryResolver {
         if (preferredPath != null && !preferredPath.isBlank()) {
             Path p = Path.of(preferredPath);
             if (Files.isExecutable(p) || Files.exists(p)) {
-                log.debug("Resolved binary '{}' via preferred path: {}", binaryName, p);
+                log.info("[BINARY-RESOLVER] ✅ Resolved binary '{}' via preferred path: {}", binaryName, p.toAbsolutePath());
                 return Optional.of(p);
             }
             // On Windows, try appending .exe
             if (isWindows()) {
                 Path withExe = Path.of(preferredPath + ".exe");
                 if (Files.exists(withExe)) {
-                    log.debug("Resolved binary '{}' via preferred path (with .exe): {}", binaryName, withExe);
+                    log.info("[BINARY-RESOLVER] ✅ Resolved binary '{}' via preferred path (with .exe): {}", binaryName, withExe.toAbsolutePath());
                     return Optional.of(withExe);
                 }
             }
@@ -135,7 +129,7 @@ public class BinaryResolver {
             if (info != null) {
                 Optional<Path> managed = binaryManager.getBinaryPath(info);
                 if (managed.isPresent()) {
-                    log.debug("Resolved binary '{}' via BinaryManager: {}", binaryName, managed.get());
+                    log.info("[BINARY-RESOLVER] ✅ Resolved binary '{}' via BinaryManager: {}", binaryName, managed.get().toAbsolutePath());
                     return managed;
                 }
             }
@@ -145,26 +139,12 @@ public class BinaryResolver {
         Optional<String> pathOnPath = searchPath(binaryName);
         if (pathOnPath.isPresent()) {
             Path resolved = Path.of(pathOnPath.get());
-            log.debug("Resolved binary '{}' via system PATH: {}", binaryName, resolved);
+            log.info("[BINARY-RESOLVER] ✅ Resolved binary '{}' via system PATH: {}", binaryName, resolved.toAbsolutePath());
             return Optional.of(resolved);
         }
 
-        log.debug("Binary '{}' not found via any resolution strategy.", binaryName);
+        log.info("[BINARY-RESOLVER] ❌ Binary '{}' not found via any resolution strategy", binaryName);
         return Optional.empty();
-    }
-
-    /**
-     * Resolves the binary and returns its path as a {@link String}.
-     *
-     * <p>This is the <b>legacy</b> API retained for backward compatibility.
-     * New code should prefer {@link #resolvePath(String, String)}.
-     *
-     * @param preferredPath an explicit binary path (may be {@code null}).
-     * @param binaryName    the bare binary name (e.g. {@code "node"}).
-     * @return the resolved path string, or {@link Optional#empty()}.
-     */
-    public Optional<String> resolve(String preferredPath, String binaryName) {
-        return resolvePath(preferredPath, binaryName).map(Path::toString);
     }
 
     /**

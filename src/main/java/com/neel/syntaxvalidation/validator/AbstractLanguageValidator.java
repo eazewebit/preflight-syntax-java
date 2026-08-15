@@ -28,7 +28,8 @@ import java.util.Optional;
  *   <li>{@link #getFileExtension()} &ndash; the temp-file extension;</li>
  *   <li>{@link #buildCommand(String, Path)} &ndash; the command line;</li>
  *   <li>{@link #parseOutput(ProcessResult, Path)} &ndash; interpreting the tool output;</li>
- *   <li>{@link #binaryNotFoundMessage()} &ndash; the error shown when the tool is missing.</li>
+ *   <li>{@link #binaryNotFoundMessage()} &ndash; the error shown when the tool is missing;</li>
+ *   <li>{@link #validateWithBuiltInEngine(String)} &ndash; optional built-in engine fallback.</li>
  * </ul>
  *
  * <p><b>Binary resolution strategy.</b> When a preferred binary path is supplied
@@ -38,8 +39,14 @@ import java.util.Optional;
  * constructor, the resolver delegates to it before checking {@code PATH},
  * enabling automatic download and caching of managed binaries.
  *
- * <p>If neither is available, validation fails gracefully with the message
- * produced by {@link #binaryNotFoundMessage()}.
+ * <p>If neither is available, validation falls back to the built-in engine
+ * via {@link #validateWithBuiltInEngine(String)}.
+ *
+ * <p><b>Validation order (Binary-First):</b>
+ * <ol>
+ *   <li>Phase 1 - External binary (when available)</li>
+ *   <li>Phase 2 - Built-in engine (fallback when binary unavailable or fails)</li>
+ * </ol>
  */
 public abstract class AbstractLanguageValidator implements LanguageValidator {
 
@@ -127,48 +134,185 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
         return binaryResolver;
     }
 
-    @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
+    /**
+     * Returns the underlying {@link ProcessExecutor}.
+     *
+     * @return the process executor (never {@code null}).
+     */
+    protected final ProcessExecutor getProcessExecutor() {
+        return processExecutor;
+    }
 
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            return ValidationResult.invalid(binaryNotFoundMessage());
-        }
-
-        Path tempFile = null;
+    /**
+     * Deletes a file or directory silently, ignoring any errors.
+     * If the path is a directory, its immediate children are deleted first.
+     *
+     * @param path the file or directory to delete.
+     */
+    protected void deleteQuietly(Path path) {
+        if (path == null) return;
         try {
-            tempFile = createTempFile();
-            Files.writeString(tempFile, safeContent, StandardCharsets.UTF_8);
-            List<String> command = buildCommand(binary.get(), tempFile);
-            log.debug("Executing command: {}", command);
-            ProcessResult result = processExecutor.execute(command);
-            return parseOutput(result, tempFile);
-        } catch (IOException e) {
-            log.error("I/O error during validation", e);
-            return ValidationResult.invalid("Validation failed due to an I/O error: " + e.getMessage());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Validation was interrupted");
-            return ValidationResult.invalid("Validation was interrupted before it could complete.");
-        } finally {
-            if (tempFile != null) {
-                deleteQuietly(tempFile);
+            if (Files.isDirectory(path)) {
+                try (var stream = Files.list(path)) {
+                    stream.forEach(child -> {
+                        try {
+                            Files.deleteIfExists(child);
+                        } catch (IOException ignored) {
+                            // best-effort cleanup
+                        }
+                    });
+                }
             }
+            Files.deleteIfExists(path);
+        } catch (IOException ignored) {
+            // best-effort cleanup of temp files
         }
     }
 
     /**
-     * @return the file extension (including the dot) for the temporary file, e.g. {@code ".js"}.
+     * Logs validation phase information for debugging and monitoring.
+     *
+     * @param language the language being validated
+     * @param phase    the validation phase (1 or 2)
+     * @param message  the log message
+     */
+    protected void logValidationPhase(String language, int phase, String message) {
+        log.debug("{} validation - Phase {}: {}", language, phase, message);
+    }
+
+    /**
+     * Logs when built-in engine fallback is used.
+     *
+     * @param language the language being validated
+     * @param reason   the reason for fallback
+     */
+    protected void logBuiltInEngineFallback(String language, String reason) {
+        log.info("{} validation: Using built-in engine fallback. Reason: {}", language, reason);
+    }
+
+    /**
+     * Optional hook for subclasses that have a built-in syntax engine.
+     * When binary validation is unavailable or fails, this method is called
+     * as a fallback.
+     *
+     * <p>Default implementation returns {@code null}, indicating no built-in
+     * engine is available. Subclasses with built-in engines should override
+     * this method.
+     *
+     * @param content the content to validate
+     * @return ValidationResult from the built-in engine, or null if no built-in engine
+     */
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        return null;
+    }
+
+    /**
+     * Two-phase validation using a default filename derived from
+     * {@link #getFileExtension()}.
+     *
+     * <p>Delegates to {@link #validate(String, String)} with a filename of
+     * {@code "source" + getFileExtension()}.
+     */
+    @Override
+    public ValidationResult validate(String content) {
+        return validate(content, "source" + getFileExtension());
+    }
+
+    /**
+     * Two-phase validation: Binary-first approach.
+     *
+     * <p>The content is written to a temporary file bearing the supplied
+     * {@code fileName} inside a temporary directory. The directory and all
+     * its contents are deleted after validation completes.
+     *
+     * <ol>
+     *   <li>Phase 1 - External binary (when available)</li>
+     *   <li>Phase 2 - Built-in engine (fallback when binary unavailable or fails)</li>
+     * </ol>
+     *
+     * @param content  the source text to check; {@code null} is treated as empty.
+     * @param fileName the file name to use for the temporary file.
+     */
+    @Override
+    public ValidationResult validate(String content, String fileName) {
+        String safeContent = content == null ? "" : content;
+
+        // Phase 1 - Binary validation (check availability first)
+        Optional<String> binary = resolveBinary();
+        if (binary.isPresent()) {
+            String binaryPath = binary.get();
+            log.info("╔══════════════════════════════════════════════════════════════");
+            log.info("║ [PHASE-1-BINARY] {} validation: Using BINARY", getLanguage().name());
+            log.info("║ Binary name: {}", binaryName);
+            log.info("║ Binary path: {}", binaryPath);
+            log.info("╚══════════════════════════════════════════════════════════════");
+            Path tempDir = null;
+            try {
+                tempDir = Files.createTempDirectory("syntax-check-");
+                Path tempFile = tempDir.resolve(fileName);
+                Files.writeString(tempFile, safeContent, StandardCharsets.UTF_8);
+                List<String> command = buildCommand(binaryPath, tempFile);
+                log.debug("[PHASE-1-BINARY] Executing command: {}", command);
+                ProcessResult result = processExecutor.execute(command);
+
+                ValidationResult binaryResult = parseOutput(result, tempFile);
+                if (binaryResult.isValid()) {
+                    log.info("[PHASE-1-BINARY] ✅ {} validation: Binary validation PASSED", getLanguage().name());
+                    return binaryResult;
+                }
+                // Binary found errors, return them
+                log.info("[PHASE-1-BINARY] ❌ {} validation: Binary found {} errors",
+                         getLanguage().name(), binaryResult.getErrors().size());
+                return binaryResult;
+            } catch (IOException e) {
+                log.error("[PHASE-1-BINARY] ❌ {} validation: Binary I/O error, falling back to built-in engine",
+                         getLanguage().name(), e);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("[PHASE-1-BINARY] ❌ {} validation: Binary validation interrupted, falling back to built-in engine",
+                        getLanguage().name());
+            } catch (Exception e) {
+                log.warn("[PHASE-1-BINARY] ❌ {} validation: Binary execution failed, falling back to built-in engine",
+                        getLanguage().name(), e);
+            } finally {
+                deleteQuietly(tempDir);
+            }
+        } else {
+            log.info("╔══════════════════════════════════════════════════════════════");
+            log.info("║ [PHASE-1-BINARY] {} validation: Binary NOT FOUND", getLanguage().name());
+            log.info("║ Binary name: {}", binaryName);
+            log.info("║ Searching: System PATH and BinaryManager");
+            log.info("╚══════════════════════════════════════════════════════════════");
+        }
+
+        // Phase 2 - Built-in engine fallback
+        ValidationResult builtInResult = validateWithBuiltInEngine(safeContent);
+        if (builtInResult != null) {
+            log.info("╔══════════════════════════════════════════════════════════════");
+            log.info("║ [PHASE-2-FALLBACK] {} validation: Using BUILT-IN ENGINE", getLanguage().name());
+            log.info("║ Reason: {}", binary.isPresent() ? "Binary execution failed" : "Binary not available");
+            log.info("╚══════════════════════════════════════════════════════════════");
+            return builtInResult;
+        }
+
+        // No built-in engine available
+        logBuiltInEngineFallback(getLanguage().name(), "Binary not available and no built-in engine");
+        return ValidationResult.invalid(binaryNotFoundMessage());
+    }
+
+    /**
+     * Returns the file extension (including the dot) used for temporary files.
+     *
+     * @return e.g. {@code ".java"}, {@code ".py"}.
      */
     protected abstract String getFileExtension();
 
     /**
-     * Builds the command line used to invoke the validation tool.
+     * Builds the command-line invocation for the external tool.
      *
-     * @param binaryPath the resolved binary path.
-     * @param tempFile   the temporary file holding the content to validate.
-     * @return the command and its arguments.
+     * @param binaryPath the resolved path to the tool binary.
+     * @param tempFile   the temporary file containing the content to validate.
+     * @return the command as a list of strings.
      */
     protected abstract List<String> buildCommand(String binaryPath, Path tempFile);
 
@@ -185,19 +329,4 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
      * @return the explanation returned when the validation tool cannot be located.
      */
     protected abstract String binaryNotFoundMessage();
-
-    /**
-     * Creates a uniquely named temporary file bearing this validator's extension.
-     */
-    protected Path createTempFile() throws IOException {
-        return Files.createTempFile("syntax-check-", getFileExtension());
-    }
-
-    private static void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-            // best-effort cleanup of temp files
-        }
-    }
 }

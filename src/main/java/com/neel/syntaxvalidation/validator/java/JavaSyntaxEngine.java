@@ -69,7 +69,8 @@ public final class JavaSyntaxEngine {
      */
     public ValidationResult validate(String source) {
         if (source == null || source.isEmpty()) {
-            return ValidationResult.valid("Java syntax is valid.");
+            return ValidationResult.valid(
+                    "Java syntax is valid (validated by the built-in Java syntax engine).");
         }
         List<JavaToken> tokens = new JavaLexer(source).tokenize();
         List<ValidationError> errors = new ArrayList<>();
@@ -77,8 +78,12 @@ public final class JavaSyntaxEngine {
             checker.check(tokens, errors);
         }
         return errors.isEmpty()
-                ? ValidationResult.valid("Java syntax is valid.")
-                : ValidationResult.invalid("Java syntax errors detected.", errors);
+                ? ValidationResult.valid(
+                        "Java syntax is valid (validated by the built-in Java syntax engine).")
+                : ValidationResult.invalid(
+                        "Java syntax validation failed with " + errors.size()
+                                + " error(s) detected by the built-in Java syntax engine.",
+                        errors);
     }
 
     /**

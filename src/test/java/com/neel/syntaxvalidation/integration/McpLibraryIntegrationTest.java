@@ -753,6 +753,9 @@ class McpLibraryIntegrationTest {
 
             SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
+            // Snapshot before
+            long beforeCount = countTempFiles();
+
             // Run many validations
             for (int i = 0; i < 20; i++) {
                 ModificationRequest request = ModificationRequest.builder()
@@ -767,11 +770,13 @@ class McpLibraryIntegrationTest {
             // Small delay for cleanup
             try { Thread.sleep(500); } catch (InterruptedException ignored) {}
 
-            // Temp files should not accumulate significantly
-            long tempFileCount = countTempFiles();
-            assertThat(tempFileCount).isLessThan(50);
+            // Temp file/dir count should not grow significantly
+            long afterCount = countTempFiles();
+            long delta = afterCount - beforeCount;
+            assertThat(delta).as(
+                    "temp entries created but not cleaned up (before=%d, after=%d)",
+                    beforeCount, afterCount).isLessThan(5);
         }
-
         private long countTempFiles() {
             try {
                 Path tempDirPath = Path.of(System.getProperty("java.io.tmpdir"));

@@ -12,19 +12,17 @@ import com.neel.syntaxvalidation.validator.LanguageValidator;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * Validates PHP source code using a two-phase, non-executing strategy.
+ * Validates PHP source code using a two-phase, binary-first strategy.
  *
- * <h2>Phase 1 - built-in PhpSyntaxEngine (always runs)</h2>
- * A fast, dependency-free structural pass.
+ * <h2>Phase 1 - php -l deep analysis (when available)</h2>
+ * If a php binary is resolvable, the source is validated using PHP's
+ * built-in lint mode. The code is never executed.
  *
- * <h2>Phase 2 - php -l lint mode (when available)</h2>
- * If the pure-Java engine reports no errors and a php binary is resolvable,
- * the source is validated using PHP's built-in lint mode.
- *
- * If the PHP binary is unavailable, the clean result from phase 1 stands.
+ * <h2>Phase 2 - built-in PhpSyntaxEngine (fallback)</h2>
+ * If php is <em>not</em> available or execution fails, a fast,
+ * dependency-free structural pass runs as fallback.
  */
 public class PhpValidator extends AbstractLanguageValidator implements LanguageValidator {
 
@@ -71,24 +69,23 @@ public class PhpValidator extends AbstractLanguageValidator implements LanguageV
     }
 
     @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
+    public Language getLanguage() {
+        return Language.PHP;
+    }
 
-        // Phase 1
-        ValidationResult engineResult = ENGINE.validate(safeContent);
+    /**
+     * Built-in PHP syntax engine fallback (Phase 2).
+     * This method is called by the base class when binary validation is
+     * unavailable or fails.
+     */
+    @Override
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        log.trace("[PHASE-2-FALLBACK] Using built-in PHP syntax engine for validation");
+        ValidationResult engineResult = ENGINE.validate(content);
         if (!engineResult.isValid()) {
-            return engineResult;
+            log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
         }
-
-        // Phase 2
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            return ValidationResult.valid(
-                    "PHP syntax is valid (validated by the built-in PHP syntax engine; "
-                            + "php not available for deeper analysis).");
-        }
-
-        return super.validate(safeContent);
+        return engineResult;
     }
 
     /**
@@ -100,11 +97,6 @@ public class PhpValidator extends AbstractLanguageValidator implements LanguageV
      */
     public ValidationResult validateSource(String source) {
         return ENGINE.validate(source == null ? "" : source);
-    }
-
-    @Override
-    public Language getLanguage() {
-        return Language.PHP;
     }
 
     @Override

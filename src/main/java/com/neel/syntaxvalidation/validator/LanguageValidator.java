@@ -27,6 +27,22 @@ public interface LanguageValidator {
     ValidationResult validate(String content);
 
     /**
+     * Validates the given source content, writing it to a temporary file
+     * bearing the supplied {@code fileName}.
+     *
+     * <p>Preserving the original filename is critical for languages such as
+     * Java where a {@code public class Foo} declaration must reside in a file
+     * named {@code Foo.java}.
+     *
+     * @param content  the source text to check; {@code null} is treated as empty.
+     * @param fileName the file name to use (e.g. {@code "Foo.java"}).
+     * @return a structured {@link ValidationResult}.
+     */
+    default ValidationResult validate(String content, String fileName) {
+        return validate(content);
+    }
+
+    /**
      * @return the language this validator is responsible for.
      */
     Language getLanguage();

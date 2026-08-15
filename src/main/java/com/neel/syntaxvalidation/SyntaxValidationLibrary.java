@@ -109,18 +109,26 @@ public class SyntaxValidationLibrary {
     public static void main(String[] args) throws IOException {
         SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
+        String filepath = "C:\\Users\\njpollob\\Documents\\test-ai-tool\\css\\valid\\simple.css";
+
+        library.clearCache();
+        // build modification request
         ModificationRequest modificationRequest
                 = ModificationRequest.builder()
-                        .filePath("C:\\Users\\njpollob\\Documents\\test-ai-tool\\html\\invalid\\unclosed_tag.html")
-                                .fromLine(9)
-                                        .toLine(36)
-                                                .replacement("<div>This should be valid</div>")
+                        .filePath(filepath)
+                                .fromLine(34)
+                                        .toLine(35)
+                                                .replacement("")
                                                         .build();
-        ValidationResult result = library.validateMixedContent(modificationRequest);
 
+        // smart route and validation.
+        ValidationResult result = library.validateAllLanguage(modificationRequest);
+
+        //print result
         System.out.println(result);
 
     }
+
 
     /**
      * Returns the {@link BinaryManager} used by this library to resolve
@@ -178,7 +186,8 @@ public class SyntaxValidationLibrary {
                 request.getReplacement());
 
         String modifiedContent = String.join("\n", modifiedLines);
-        ValidationResult result = validator.get().validate(modifiedContent);
+        String fileName = path.getFileName().toString();
+        ValidationResult result = validator.get().validate(modifiedContent, fileName);
         log.debug("Validation result for {}: valid={}", path, result.isValid());
         return result;
     }
@@ -259,11 +268,62 @@ public class SyntaxValidationLibrary {
     }
 
     /**
+     * Unified validation entry-point that automatically selects mixed-content
+     * validation (HTML/PHP with embedded CSS/JS) or language-specific validation
+     * depending on the detected file language.
+     *
+     * <p>Detection is based solely on the file extension of
+     * {@link ModificationRequest#getFilePath()}. The routing logic is:
+     * <ul>
+     *   <li><b>HTML / PHP</b> – delegates to
+     *       {@link #validateMixedContent(ModificationRequest)}, which validates
+     *       the HTML/PHP structure <em>and</em> any embedded {@code <style>},
+     *       {@code <script>} and {@code <?php} blocks.</li>
+     *   <li><b>All other supported languages</b> (JavaScript, TypeScript, CSS,
+     *       Python, Java) – delegates to {@link #validate(ModificationRequest)},
+     *       which uses the corresponding {@link LanguageValidator}.</li>
+     * </ul>
+     *
+     * <p>If the file extension is unsupported, a diagnostic
+     * {@link ValidationResult} is returned.
+     *
+     * @param request the modification to validate; must not be {@code null}.
+     * @return a structured result describing whether the modified content is
+     *         syntactically valid.
+     * @throws IllegalArgumentException if {@code request} is {@code null}.
+     */
+    public ValidationResult validateAllLanguage(ModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.getFilePath());
+        log.debug("validateAllLanguage for file: {}", path);
+
+        Optional<Language> language = Language.fromPath(path);
+        if (language.isEmpty()) {
+            log.warn("Unsupported file extension: {}", path);
+            return ValidationResult.invalid(
+                    "Unable to detect a supported language from the file extension: " + path);
+        }
+
+        switch (language.get()) {
+            case HTML:
+            case PHP:
+                log.debug("Routing to mixed-content validation for {}", language.get());
+                return validateMixedContent(request);
+            default:
+                log.debug("Routing to language-specific validation for {}", language.get());
+                return validate(request);
+        }
+    }
+
+    /**
      * Forces the cached content for the given file to be discarded so that the
      * next {@link #validate(ModificationRequest)} reloads it from disk.
      *
-     * @param path the file path.
-     * @return {@code true} if a cached entry was removed.
+     * @param path the file whose cache entry should be evicted.
+     * @return {@code true} if an entry existed and was removed.
      */
     public boolean invalidateCache(Path path) {
         return fileCache.invalidate(path);

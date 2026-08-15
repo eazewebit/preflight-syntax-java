@@ -32,24 +32,25 @@ import java.util.regex.Pattern;
  * {@code error:} and are <em>not</em> treated as validation failures, since
  * they do not affect syntactic correctness.
  *
- * <p>The parser is tolerant of unexpected output: anything it cannot match is
- * preserved as a generic diagnostic so that no information is silently lost.
+ * <p>After each matched DIAGNOSTIC line javac emits up to two additional lines:
+ * the echoed source line and a caret-marker line. These must be skipped by the
+ * parser to avoid being mis-classified as standalone diagnostics.
  */
 final class JavacOutputParser {
 
     /**
      * Matches a javac error or warning line, optionally including the column.
      * <ul>
-     *   <li>group&nbsp;1 &mdash; line number</li>
-     *   <li>group&nbsp;2 &mdash; optional column number</li>
-     *   <li>group&nbsp;3 &mdash; severity ({@code error} or {@code warning})</li>
-     *   <li>group&nbsp;4 &mdash; message text</li>
+     *   <li>group 1 — line number</li>
+     *   <li>group 2 — optional column number</li>
+     *   <li>group 3 — severity ({@code error} or {@code warning})</li>
+     *   <li>group 4 — message text</li>
      * </ul>
      */
     private static final Pattern DIAGNOSTIC = Pattern.compile(
             "^\\S.*?:(\\d+)(?::(\\d+))?:\\s*(error|warning):\\s*(.+)$");
 
-    /** Matches the summary line such as {@code 2 errors}, {@code 1 error}, or {@code 3 warnings}. */
+    /** Matches the summary line such as {@code 2 errors} or {@code 3 warnings}. */
     private static final Pattern SUMMARY = Pattern.compile(
             "^\\s*\\d+\\s+(errors?|warnings?)\\s*$");
 
@@ -70,6 +71,11 @@ final class JavacOutputParser {
         List<ValidationError> errors = new ArrayList<>();
         String[] lines = rawOutput.split("\\R");
 
+        // After a matched DIAGNOSTIC line, javac emits up to two additional
+        // lines: the echoed source and the caret marker.  We track how many
+        // "echo" lines to skip so they are not mis-classified as diagnostics.
+        int echoLinesRemaining = 0;
+
         for (String line : lines) {
             Matcher m = DIAGNOSTIC.matcher(line);
             if (m.find()) {
@@ -80,10 +86,20 @@ final class JavacOutputParser {
                 if ("error".equals(severity)) {
                     errors.add(new ValidationError(lineNo, col, message, line));
                 }
-                // Warnings are intentionally skipped.
-            } else if (!SUMMARY.matcher(line).matches() && !line.isBlank()
-                    && !isSourceEcho(line)) {
-                // Preserve truly unexpected lines so callers can investigate.
+                // The next 2 non-blank lines are echoed source + caret marker.
+                echoLinesRemaining = 2;
+            } else if (SUMMARY.matcher(line).matches()) {
+                // Summary line – skip, and reset echo counter.
+                echoLinesRemaining = 0;
+            } else if (line.isBlank()) {
+                // Blank line resets the echo state.
+                echoLinesRemaining = 0;
+            } else if (echoLinesRemaining > 0) {
+                // Source-echo or caret marker following a diagnostic — skip.
+                echoLinesRemaining--;
+            } else {
+                // Truly unexpected non-blank line — preserve as a fallback
+                // diagnostic so callers can investigate unknown output.
                 errors.add(new ValidationError(1, -1, line.trim(), line));
             }
         }
@@ -91,13 +107,5 @@ final class JavacOutputParser {
         return errors.isEmpty()
                 ? ValidationResult.valid("javac reported no syntax errors.")
                 : ValidationResult.invalid("javac detected syntax errors.", errors);
-    }
-
-    /**
-     * Heuristically detects source-echo lines (indented code followed by a caret
-     * marker) so they are not treated as standalone diagnostics.
-     */
-    private static boolean isSourceEcho(String line) {
-        return line.isBlank() || line.trim().startsWith("^") || line.startsWith("    ");
     }
 }

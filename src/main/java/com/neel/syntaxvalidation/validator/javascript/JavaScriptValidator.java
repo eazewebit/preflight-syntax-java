@@ -11,28 +11,23 @@ import com.neel.syntaxvalidation.validator.AbstractLanguageValidator;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
 
 /**
- * Validates JavaScript syntax using a two-phase approach.
+ * Validates JavaScript syntax using a two-phase, binary-first approach.
  *
- * <h2>Phase 1 &mdash; Built-in ES6+ syntax engine</h2>
- * A pure-Java {@link JavaScriptSyntaxEngine} runs first, with zero external
- * dependencies. It tokenises the source and applies a suite of structural checks
- * covering arrow functions, destructuring, async/await, template literals,
- * optional chaining, spread syntax, modern class definitions, and much more.
- * If the engine detects errors they are returned immediately.
- *
- * <h2>Phase 2 &mdash; Node.js deep analysis</h2>
+ * <h2>Phase 1 &mdash; Node.js deep analysis (when available)</h2>
  * When Node.js is available on the system &mdash; either from an explicitly
  * supplied preferred path, from a {@link BinaryManager}, or from the system
- * {@code PATH} &mdash; the full {@code node --check} pipeline runs as a second
- * pass, catching subtler semantic-adjacent syntax errors that a pure-Java engine
- * cannot reasonably detect (e.g. duplicate parameter names, invalid label
- * syntax, or contextual grammar violations).
+ * {@code PATH} &mdash; the full {@code node --check} pipeline runs as the
+ * first pass, catching the most comprehensive set of syntax errors.
  *
- * <p>If Node.js is <em>not</em> available, the built-in engine's clean result
- * stands on its own, providing meaningful syntax validation in any environment.
+ * <h2>Phase 2 &mdash; Built-in ES6+ syntax engine (fallback)</h2>
+ * If Node.js is <em>not</em> available or execution fails, a pure-Java
+ * {@link JavaScriptSyntaxEngine} runs as fallback, with zero external
+ * dependencies. It tokenises the source and applies a suite of structural
+ * checks covering arrow functions, destructuring, async/await, template
+ * literals, optional chaining, spread syntax, modern class definitions,
+ * and much more.
  *
  * <p>Both the {@link BinaryResolver} and {@link ProcessExecutor} collaborators
  * are injectable to ease unit testing.
@@ -103,39 +98,18 @@ public class JavaScriptValidator extends AbstractLanguageValidator {
     }
 
     /**
-     * Two-phase validation.
-     *
-     * <ol>
-     *   <li>Run the built-in {@link JavaScriptSyntaxEngine}. If it reports
-     *       errors, return them immediately &mdash; no external process is
-     *       needed.</li>
-     *   <li>If the engine passes and Node.js is available, delegate to
-     *       {@code super.validate()} (which invokes {@code node --check}) for
-     *       deeper analysis.</li>
-     *   <li>If Node.js is unavailable, the engine's clean result stands.</li>
-     * </ol>
+     * Built-in ES6+ syntax engine fallback (Phase 2).
+     * This method is called by the base class when binary validation is
+     * unavailable or fails.
      */
     @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
-
-        // Phase 1 — built-in ES6+ syntax engine (always runs, zero external deps)
-        ValidationResult engineResult = SYNTAX_ENGINE.validate(safeContent);
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        log.trace("[PHASE-2-FALLBACK] Using built-in ES6+ syntax engine for validation");
+        ValidationResult engineResult = SYNTAX_ENGINE.validate(content);
         if (!engineResult.isValid()) {
-            return engineResult;
+            log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
         }
-
-        // Phase 2 — Node.js deep analysis (when available)
-        Optional<String> binary = resolveBinary();
-        if (binary.isEmpty()) {
-            // Node.js unavailable — the engine's clean result stands.
-            return ValidationResult.valid(
-                    "JavaScript syntax is valid (validated by the built-in ES6+ syntax engine; "
-                            + "Node.js not available for deeper analysis).");
-        }
-
-        // Node.js available — delegate to the full pipeline for maximum coverage.
-        return super.validate(safeContent);
+        return engineResult;
     }
 
     @Override
@@ -171,6 +145,7 @@ public class JavaScriptValidator extends AbstractLanguageValidator {
     protected String binaryNotFoundMessage() {
         return "Node.js binary ('" + BINARY_NAME + "') could not be found. "
                 + "Either provide a valid preferred binary path or ensure Node.js is installed "
-                + "and available on the system PATH.";
+                + "and available on the system PATH. "
+                + "Falling back to the built-in ES6+ syntax engine.";
     }
 }

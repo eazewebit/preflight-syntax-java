@@ -1,0 +1,154 @@
+package com.neel.syntaxvalidation.validator.java;
+
+import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
+import com.neel.syntaxvalidation.model.Language;
+import com.neel.syntaxvalidation.model.ValidationError;
+import com.neel.syntaxvalidation.model.ValidationEngine;
+import com.neel.syntaxvalidation.model.ValidationResult;
+import com.neel.syntaxvalidation.process.ProcessExecutor;
+import com.neel.syntaxvalidation.process.ProcessResult;
+import com.neel.syntaxvalidation.validator.AbstractLanguageValidator;
+import com.neel.syntaxvalidation.validator.LanguageValidator;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
+
+/**
+ * Validates Java source code using a two-phase, non-executing strategy.
+ *
+ * <h2>Phase 1 — built-in JavaSyntaxEngine (always runs)</h2>
+ * A fast, dependency-free structural pass using a pure-Java parser.
+ *
+ * <h2>Phase 2 — javac deep analysis (when available)</h2>
+ * If the pure-Java engine reports no errors and javac is resolvable,
+ * the source is written to a temp file and compiled using the Java compiler
+ * in no-codegen mode ({@code -proc:none -d /tmp}).
+ *
+ * <p>If javac is unavailable, the clean result from phase 1 stands.
+ */
+public class JavaValidator extends AbstractLanguageValidator implements LanguageValidator {
+
+    static final String BINARY_NAME = "javac";
+
+    private static final JavaSyntaxEngine ENGINE = new JavaSyntaxEngine();
+
+    public JavaValidator() {
+        this((String) null);
+    }
+
+    public JavaValidator(String preferredBinaryPath) {
+        this(preferredBinaryPath, new BinaryResolver(), new ProcessExecutor());
+    }
+
+    public JavaValidator(BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
+        this(null, binaryResolver, processExecutor);
+    }
+
+    public JavaValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
+                         ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
+    }
+
+    /**
+     * Creates a JavaValidator backed by a {@link BinaryManager} for managed binary resolution.
+     *
+     * @param binaryManager the binary manager (may be null for PATH-only resolution).
+     */
+    public JavaValidator(BinaryManager binaryManager) {
+        super(null, BINARY_NAME, binaryManager, new ProcessExecutor());
+    }
+
+    /**
+     * Creates a JavaValidator with full configuration.
+     *
+     * @param preferredBinaryPath the preferred javac binary path (null for auto-resolve).
+     * @param binaryManager       the binary manager to use.
+     * @param processExecutor     the process executor to use.
+     */
+    public JavaValidator(String preferredBinaryPath, BinaryManager binaryManager,
+                         ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
+    }
+
+    @Override
+    public ValidationResult validate(String safeContent) {
+        Optional<String> binary = resolveBinary();
+        if (binary.isEmpty()) {
+            return ValidationResult.valid(
+                    "Java syntax is valid (validated by the built-in Java syntax engine; "
+                            + "javac not available for deeper analysis).",
+                    ValidationEngine.JAVA);
+        }
+
+        return super.validate(safeContent);
+    }
+
+    /**
+     * Validates a Java source string directly using only the built-in syntax engine.
+     *
+     * @param source the Java source code to validate.
+     * @return the ValidationResult.
+     */
+    public ValidationResult validateSource(String source) {
+        return ENGINE.validate(source == null ? "" : source);
+    }
+
+    @Override
+    public Language getLanguage() {
+        return Language.JAVA;
+    }
+
+    @Override
+    protected String getFileExtension() {
+        return ".java";
+    }
+
+    @Override
+    protected List<String> buildCommand(String binaryPath, Path tempFile) {
+        return List.of(binaryPath, "-source", "21", "-proc:none", "-d",
+                System.getProperty("java.io.tmpdir"), tempFile.toString());
+    }
+
+    @Override
+    protected ValidationResult parseOutput(ProcessResult result, Path tempFile) {
+        if (result.timedOut()) {
+            return ValidationResult.invalid(
+                    "javac validation timed out.",
+                    new ValidationError(-1, -1, "The javac process did not finish in time.", result.stderr()),
+                    ValidationEngine.JAVAC);
+        }
+
+        if (result.succeeded()) {
+            return ValidationResult.valid("Java syntax is valid (verified by javac).", ValidationEngine.JAVAC);
+        }
+
+        String output = result.stderr();
+        if (output == null || output.isBlank()) {
+            output = result.stdout();
+        }
+
+        JavacOutputParser parser = new JavacOutputParser();
+        List<ValidationError> errors = parser.parseErrors(output);
+        if (!errors.isEmpty()) {
+            String summary = "Java syntax validation failed with " + errors.size() + " error(s).";
+            return ValidationResult.invalid(summary, errors, ValidationEngine.JAVAC);
+        }
+
+        String message = (output == null || output.isBlank())
+                ? "javac exited with code " + result.exitCode() + " but produced no parseable output."
+                : output.trim();
+        return ValidationResult.invalid(message,
+                new ValidationError(1, -1, message, null),
+                ValidationEngine.JAVAC);
+    }
+
+    @Override
+    protected String binaryNotFoundMessage() {
+        return "Java compiler ('" + BINARY_NAME + "') could not be found. "
+                + "Either provide a valid preferred binary path or ensure a JDK is installed "
+                + "and available on the system PATH. "
+                + "Falling back to the built-in Java syntax engine.";
+    }
+}
