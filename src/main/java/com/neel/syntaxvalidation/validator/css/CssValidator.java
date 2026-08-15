@@ -1,164 +1,96 @@
 package com.neel.syntaxvalidation.validator.css;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.Language;
+import com.neel.syntaxvalidation.model.ValidationError;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.process.ProcessExecutor;
 import com.neel.syntaxvalidation.process.ProcessResult;
 import com.neel.syntaxvalidation.validator.AbstractLanguageValidator;
+import com.neel.syntaxvalidation.validator.LanguageValidator;
 
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 
 /**
-/**
- * A {@link com.neel.syntaxvalidation.validator.LanguageValidator} implementation
- * that validates CSS source files using a dual-strategy approach.
+ * Validates CSS source code using a two-phase, non-executing strategy.
  *
- * <h2>Validation strategy</h2>
- * <ol>
- *   <li><b>External binary (primary)</b> &mdash; invokes
- *       <a href="https://stylelint.io/">stylelint</a> with
- *       {@code --formatter json} to perform deep, rule-based CSS validation.
- *       The binary is resolved via {@link BinaryResolver} using the binary key
- *       {@code "stylelint"}.</li>
- *   <li><b>Embedded engine (fallback)</b> &mdash; when stylelint is not
- *       available, the built-in {@link CssSyntaxEngine} performs a suite of
- *       structural checks: brace balance, comment syntax, selector
- *       validation, declaration validation, at-rule checks, and URL function
- *       validation.</li>
- * </ol>
+ * <h2>Phase 1 - built-in CssSyntaxEngine (always runs)</h2>
+ * A fast, dependency-free structural pass.
  *
- * <p>If the external binary fails to execute (e.g. not installed via npm or
- * Node.js is absent), the validator silently falls back to the embedded engine
- * and includes a diagnostic message in the validation result.
+ * <h2>Phase 2 - stylelint deep analysis (when available)</h2>
+ * If the pure-Java engine reports no errors and stylelint is resolvable,
+ * the source is validated using stylelint for a comprehensive CSS lint.
  *
- * <h2>Binary resolution</h2>
- * <p>The external binary is located by {@link BinaryResolver} which searches
- * (in order):
- * <ol>
- *   <li>The system property {@code syntaxvalidation.bin.stylelint}.</li>
- *   <li>The environment variable {@code SYNTAX_VALIDATION_STYLELINT}.</li>
- *   <li>The system PATH for an executable named {@code "stylelint"}.</li>
- * </ol>
- *
- * @see CssSyntaxEngine
- * @see StylelintOutputParser
+ * If stylelint is unavailable, the clean result from phase 1 stands.
  */
-public class CssValidator extends AbstractLanguageValidator {
+public class CssValidator extends AbstractLanguageValidator implements LanguageValidator {
 
-    /** Default maximum time (in seconds) to wait for stylelint to finish. */
-    private static final long STYLELINT_TIMEOUT_SECONDS = 60;
+    static final String BINARY_NAME = "stylelint";
 
-    /** Binary name used by {@link BinaryResolver} to search on PATH. */
-    private static final String BINARY_NAME = "stylelint";
+    private static final CssSyntaxEngine ENGINE = CssSyntaxEngine.getInstance();
 
-    private final BinaryResolver binaryResolver;
-    private final ProcessExecutor processExecutor;
-
-    /**
-     * Creates a new CSS validator with default dependencies.
-     */
     public CssValidator() {
-        this(null, new BinaryResolver(), new ProcessExecutor());
+        this((String) null);
     }
 
-    /**
-     * Creates a new CSS validator with an explicit binary path.
-     *
-     * @param preferredBinaryPath the explicit path to stylelint, or {@code null}
-     *                            to resolve from PATH.
-     */
     public CssValidator(String preferredBinaryPath) {
         this(preferredBinaryPath, new BinaryResolver(), new ProcessExecutor());
     }
 
-    /**
-     * Creates a new CSS validator with explicit dependencies (useful for
-     * testing and dependency injection).
-     *
-     * @param preferredBinaryPath the explicit path to stylelint, or {@code null}.
-     * @param binaryResolver      the resolver used to locate the stylelint binary.
-     * @param processExecutor     the executor used to run external processes.
-     */
     public CssValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
                         ProcessExecutor processExecutor) {
-        super(preferredBinaryPath, BINARY_NAME,
-                Objects.requireNonNull(binaryResolver, "binaryResolver"),
-                Objects.requireNonNull(processExecutor, "processExecutor"));
-        this.binaryResolver = binaryResolver;
-        this.processExecutor = processExecutor;
+        super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
+    }
+
+    /**
+     * Creates a validator backed by a BinaryManager for managed binary resolution.
+     *
+     * @param binaryManager the binary manager (may be null for PATH-only resolution).
+     */
+    public CssValidator(BinaryManager binaryManager) {
+        super(null, BINARY_NAME, binaryManager, new ProcessExecutor());
+    }
+
+    /**
+     * Creates a validator backed by a BinaryManager with an explicit preferred path and process executor.
+     *
+     * @param preferredBinaryPath an explicit binary path, or null.
+     * @param binaryManager       the binary manager (may be null).
+     * @param processExecutor     the process executor to use.
+     */
+    public CssValidator(String preferredBinaryPath, BinaryManager binaryManager,
+                        ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
+    }
+
+    @Override
+    public ValidationResult validate(String content) {
+        String safeContent = content == null ? "" : content;
+
+        // Phase 1
+        ValidationResult engineResult = ENGINE.validate(safeContent);
+        if (!engineResult.isValid()) {
+            return engineResult;
+        }
+
+        // Phase 2
+        Optional<String> binary = resolveBinary();
+        if (binary.isEmpty()) {
+            return ValidationResult.valid(
+                    "CSS syntax is valid (validated by the built-in CSS syntax engine; "
+                            + "stylelint not available for deeper analysis).");
+        }
+
+        return super.validate(safeContent);
     }
 
     @Override
     public Language getLanguage() {
         return Language.CSS;
     }
-
-    // ------------------------------------------------------------------
-    //  Override validate() to add embedded-engine fallback
-    // ------------------------------------------------------------------
-
-    /**
-     * Validates the given CSS content. Attempts the external stylelint binary
-     * first; if the binary is unavailable, falls back to the embedded
-     * {@link CssSyntaxEngine}.
-     *
-     * @param content the CSS source to validate.
-     * @return a structured {@link ValidationResult}.
-     */
-    @Override
-    public ValidationResult validate(String content) {
-        String safeContent = content == null ? "" : content;
-
-        // Attempt to resolve the external binary
-        Optional<String> binary = resolveBinary();
-
-        if (binary.isPresent()) {
-            // Try external binary first
-            Path tempFile = null;
-            try {
-                tempFile = createTempFile();
-                Files.writeString(tempFile, safeContent, StandardCharsets.UTF_8);
-                List<String> command = buildCommand(binary.get(), tempFile);
-                ProcessResult result = processExecutor.execute(command);
-                return parseOutput(result, tempFile);
-            } catch (IOException e) {
-                // Fall through to embedded engine
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                // Fall through to embedded engine
-            } finally {
-                if (tempFile != null) {
-                    deleteQuietly(tempFile);
-                }
-            }
-        }
-
-        // External binary not available or failed — fall back to embedded engine
-        ValidationResult embeddedResult = CssSyntaxEngine.getInstance().validate(safeContent);
-
-        if (embeddedResult.isValid()) {
-            return ValidationResult.valid(
-                    (binary.isEmpty() ? binaryNotFoundMessage() + " " : "")
-                            + embeddedResult.getMessage());
-        }
-
-        // Combine the fallback message with the embedded errors
-        return ValidationResult.invalid(
-                (binary.isEmpty() ? binaryNotFoundMessage() + " " : "")
-                        + embeddedResult.getMessage(),
-                embeddedResult.getErrors());
-    }
-
-    // ------------------------------------------------------------------
-    //  AbstractLanguageValidator contract
-    // ------------------------------------------------------------------
 
     @Override
     protected String getFileExtension() {
@@ -167,65 +99,29 @@ public class CssValidator extends AbstractLanguageValidator {
 
     @Override
     protected List<String> buildCommand(String binaryPath, Path tempFile) {
-        // stylelint supports --stdin and --stdin-filename for piping content,
-        // but since AbstractLanguageValidator writes to a temp file, we use
-        // the file path directly.
-        //
-        // The command is:  stylelint --formatter json <file>
-        return List.of(binaryPath,
-                "--formatter", "json",
-                "--stdin-filename", "input.css",
-                tempFile.toString());
+        return List.of(binaryPath, "--formatter", "json", "--stdin", "--stdin-filename", "file.css");
     }
 
     @Override
     protected ValidationResult parseOutput(ProcessResult result, Path tempFile) {
-        // stylelint writes JSON to stdout; stderr contains startup errors.
-        String combined = mergeOutputs(result.stdout(), result.stderr());
-        return StylelintOutputParser.parse(combined);
+        if (result.timedOut()) {
+            return ValidationResult.invalid(
+                    "CSS syntax validation timed out.",
+                    new ValidationError(-1, -1, "The stylelint process did not finish in time.", result.stderr()));
+        }
+
+        if (result.succeeded()) {
+            return ValidationResult.valid("CSS syntax is valid (verified by stylelint).");
+        }
+
+        String output = result.stderr().isBlank() ? result.stdout() : result.stderr();
+        return StylelintOutputParser.parse(output);
     }
 
     @Override
     protected String binaryNotFoundMessage() {
-        return "stylelint is not installed or could not be resolved — "
-                + "falling back to the built-in CSS syntax engine. "
-                + "For full CSS validation, install stylelint via npm: "
-                + "'npm install -g stylelint stylelint-config-standard' "
-                + "and ensure 'stylelint' is on your PATH, or set the "
-                + "SYNTAX_VALIDATION_STYLELINT environment variable or the "
-                + "syntaxvalidation.bin.stylelint system property to its path.";
-    }
-
-    // ------------------------------------------------------------------
-    //  Internal helpers
-    // ------------------------------------------------------------------
-
-    private static String mergeOutputs(String stdout, String stderr) {
-        if (stdout == null || stdout.isBlank()) {
-            return stderr != null ? stderr : "";
-        }
-        if (stderr == null || stderr.isBlank()) {
-            return stdout;
-        }
-        // stylelint writes results to stdout; stderr typically has error info
-        // Prefer stdout if it looks like JSON
-        String trimmedStdout = stdout.stripLeading();
-        if (trimmedStdout.startsWith("[") || trimmedStdout.startsWith("{")) {
-            return stdout;
-        }
-        // If stderr looks like JSON, use that
-        String trimmedStderr = stderr.stripLeading();
-        if (trimmedStderr.startsWith("[") || trimmedStderr.startsWith("{")) {
-            return stderr;
-        }
-        return stdout;
-    }
-
-    private static void deleteQuietly(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (IOException ignored) {
-            // best-effort cleanup of temp files
-        }
+        return "stylelint binary not found. Install stylelint (npm install -g stylelint) "
+                + "or provide a path via the 'stylelint.path' system property. "
+                + "Falling back to the built-in CSS syntax engine.";
     }
 }

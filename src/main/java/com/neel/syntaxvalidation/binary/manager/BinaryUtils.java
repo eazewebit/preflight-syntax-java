@@ -51,7 +51,7 @@ public final class BinaryUtils {
      * @throws IOException if the default install directory cannot be created.
      */
     public static List<BinaryStatus> checkAll() throws IOException {
-        return new BinaryManager(DEFAULT_INSTALL_DIR).getAllStatuses();
+        return new BinaryManager().getAllStatuses();
     }
 
     /**
@@ -62,7 +62,7 @@ public final class BinaryUtils {
      * @throws IOException if the default install directory cannot be created.
      */
     public static BinaryStatus check(BinaryInfo info) throws IOException {
-        return new BinaryManager(DEFAULT_INSTALL_DIR).getStatus(info);
+        return new BinaryManager().getStatus(info);
     }
 
     /**
@@ -72,7 +72,7 @@ public final class BinaryUtils {
      * @throws IOException if the default install directory cannot be created.
      */
     public static String getStatusReport() throws IOException {
-        return new BinaryManager(DEFAULT_INSTALL_DIR).getFullReport();
+        return new BinaryManager().getFullReport();
     }
 
     /**
@@ -93,7 +93,7 @@ public final class BinaryUtils {
      * @throws IOException if the default install directory cannot be created.
      */
     public static boolean isLanguageSupported(String language) throws IOException {
-        BinaryManager manager = new BinaryManager(DEFAULT_INSTALL_DIR);
+        BinaryManager manager = new BinaryManager();
         for (BinaryInfo info : BinaryInfo.ALL) {
             for (String lang : info.getEnabledLanguages()) {
                 if (lang.equalsIgnoreCase(language)) {
@@ -121,7 +121,7 @@ public final class BinaryUtils {
      * @throws IOException if the download or installation fails.
      */
     public static Path download(BinaryInfo info, Consumer<Integer> progressPct) throws IOException {
-        BinaryManager manager = new BinaryManager(DEFAULT_INSTALL_DIR);
+        BinaryManager manager = new BinaryManager();
 
         if (progressPct != null) {
             manager.addProgressListener(new DownloadProgressListener() {
@@ -158,7 +158,7 @@ public final class BinaryUtils {
      */
     public static List<BinaryStatus> downloadAllMissing(Consumer<BinaryStatus> onEachComplete)
             throws IOException {
-        BinaryManager manager = new BinaryManager(DEFAULT_INSTALL_DIR);
+        BinaryManager manager = new BinaryManager();
         List<BinaryStatus> results = manager.downloadAllMissing();
         if (onEachComplete != null) {
             results.forEach(onEachComplete);
@@ -190,7 +190,7 @@ public final class BinaryUtils {
      */
     public static List<BinaryStatus> downloadAllMissingWithTimeout(Duration timeout)
             throws TimeoutException, IOException, InterruptedException {
-        BinaryManager manager = new BinaryManager(DEFAULT_INSTALL_DIR);
+        BinaryManager manager = new BinaryManager();
         DownloadSession session = manager.downloadAllMissingAsync();
 
         // Print progress periodically
@@ -218,7 +218,7 @@ public final class BinaryUtils {
      * @throws IOException if the default install directory cannot be created.
      */
     public static List<BinaryInfo> getMissingBinaries(String language) throws IOException {
-        BinaryManager manager = new BinaryManager(DEFAULT_INSTALL_DIR);
+        BinaryManager manager = new BinaryManager();
         java.util.ArrayList<BinaryInfo> missing = new java.util.ArrayList<>();
         for (BinaryInfo info : BinaryInfo.ALL) {
             for (String lang : info.getEnabledLanguages()) {

@@ -1,6 +1,7 @@
 package com.neel.syntaxvalidation.validator;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.process.ProcessExecutor;
 import com.neel.syntaxvalidation.process.ProcessResult;
@@ -11,7 +12,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -33,8 +33,13 @@ import java.util.Optional;
  *
  * <p><b>Binary resolution strategy.</b> When a preferred binary path is supplied
  * it takes precedence; otherwise the {@link BinaryResolver} falls back to the
- * system {@code PATH}. If neither is available, validation fails gracefully with
- * the message produced by {@link #binaryNotFoundMessage()}.
+ * system {@code PATH}. If a {@link BinaryManager} is wired in via the
+ * {@link #AbstractLanguageValidator(String, String, BinaryManager, ProcessExecutor)}
+ * constructor, the resolver delegates to it before checking {@code PATH},
+ * enabling automatic download and caching of managed binaries.
+ *
+ * <p>If neither is available, validation fails gracefully with the message
+ * produced by {@link #binaryNotFoundMessage()}.
  */
 public abstract class AbstractLanguageValidator implements LanguageValidator {
 
@@ -52,7 +57,7 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
      * @param binaryName          the bare tool name searched on {@code PATH} (e.g. {@code "node"}).
      */
     protected AbstractLanguageValidator(String preferredBinaryPath, String binaryName) {
-        this(preferredBinaryPath, binaryName, new BinaryResolver(), new ProcessExecutor());
+        this(preferredBinaryPath, binaryName, (BinaryManager) null, new ProcessExecutor());
     }
 
     /**
@@ -72,12 +77,54 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
     }
 
     /**
+     * Creates a validator backed by a {@link BinaryManager} for managed binary
+     * resolution (download, cache, version-check).
+     *
+     * <p>The {@link BinaryResolver} is constructed internally with the given
+     * manager, so callers do not need to wire it manually.
+     *
+     * @param preferredBinaryPath an explicit binary path, or {@code null}.
+     * @param binaryName          the bare tool name searched on {@code PATH}.
+     * @param binaryManager       the binary manager (may be {@code null} for
+     *                            PATH-only resolution).
+     * @param processExecutor     the process executor to use.
+     */
+    protected AbstractLanguageValidator(String preferredBinaryPath, String binaryName,
+                                        BinaryManager binaryManager, ProcessExecutor processExecutor) {
+        this.preferredBinaryPath = preferredBinaryPath;
+        this.binaryName = Objects.requireNonNull(binaryName, "binaryName");
+        this.binaryResolver = new BinaryResolver(binaryManager);
+        this.processExecutor = Objects.requireNonNull(processExecutor, "processExecutor");
+    }
+
+    /**
      * Resolves the tool binary according to the configured strategy.
      *
-     * @return the resolved path, or empty if the tool is unavailable.
+     * @return the resolved path as a string, or empty if the tool is unavailable.
      */
     protected final Optional<String> resolveBinary() {
         return binaryResolver.resolve(preferredBinaryPath, binaryName);
+    }
+
+    /**
+     * Resolves the tool binary as a {@link Path}.
+     *
+     * <p>This method leverages the full {@link BinaryManager} pipeline when
+     * available, including automatic download and caching.
+     *
+     * @return the resolved {@link Path}, or empty if the tool is unavailable.
+     */
+    protected final Optional<Path> resolveBinaryPath() {
+        return binaryResolver.resolvePath(preferredBinaryPath, binaryName);
+    }
+
+    /**
+     * Returns the underlying {@link BinaryResolver}.
+     *
+     * @return the binary resolver (never {@code null}).
+     */
+    protected final BinaryResolver getBinaryResolver() {
+        return binaryResolver;
     }
 
     @Override

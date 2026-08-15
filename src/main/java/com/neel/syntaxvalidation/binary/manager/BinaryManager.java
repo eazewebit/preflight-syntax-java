@@ -26,11 +26,11 @@ import java.util.regex.Pattern;
  *
  * <p>The {@code BinaryManager} provides three core capabilities:
  * <ol>
- *   <li><b>Status reporting</b> – query which binaries are currently installed,
+ *   <li><b>Status reporting</b> Ã¢â‚¬â€œ query which binaries are currently installed,
  *       their detected versions, and whether they meet minimum requirements.</li>
- *   <li><b>Download &amp; installation</b> – download binaries from their official
+ *   <li><b>Download &amp; installation</b> Ã¢â‚¬â€œ download binaries from their official
  *       sources, extract archives, and install npm packages.</li>
- *   <li><b>Progress monitoring</b> – register {@link DownloadProgressListener}s
+ *   <li><b>Progress monitoring</b> Ã¢â‚¬â€œ register {@link DownloadProgressListener}s
  *       to receive real-time callbacks during download and installation.</li>
  * </ol>
  *
@@ -91,18 +91,17 @@ public class BinaryManager {
     private final List<DownloadProgressListener> listeners = new CopyOnWriteArrayList<>();
     private final Map<BinaryInfo, BinaryStatus> statusCache = new LinkedHashMap<>();
 
+
     /**
-     * Creates a new {@code BinaryManager} that will download and store binaries
-     * under the given directory.
-     *
-     * @param installDir the root directory for binary installations.
-     *                   Created automatically if it does not exist.
-     * @throws IOException if the directory cannot be created.
+     * Create a new instance of {@code BinaryManager} that will download and store binaries under the given directories.
+     * The system path is: {@code /user/.code-verification-binaries}
+     * @throws IOException If directories cannot be created.
      */
-    public BinaryManager(Path installDir) throws IOException {
-        this.installDir = Objects.requireNonNull(installDir, "installDir");
+    public BinaryManager() throws IOException {
+        this.installDir = Path.of(System.getProperty("user.home"), ".code-verification-binaries");
         Files.createDirectories(installDir);
     }
+
 
     // ====================================================================
     //  Progress listener management
@@ -142,6 +141,119 @@ public class BinaryManager {
      */
     public Path getInstallDir() {
         return installDir;
+    }
+
+    /**
+     * Resolves the absolute filesystem path of a managed binary.
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>The cached {@link BinaryStatus#getResolvedPath()} from the most recent
+     *       {@link #getStatus(BinaryInfo)} or {@link #getAllStatuses()} invocation,
+     *       if present.</li>
+     *   <li>A fresh lookup via {@link #getStatus(BinaryInfo)} (system PATH first,
+     *       then the local {@link #getInstallDir() install directory}).</li>
+     * </ol>
+     *
+     * <p>The returned path is absolute and points to the actual executable file
+     * (e.g. {@code /usr/bin/node} or {@code C:\...\node.exe}).
+     *
+     * @param info the binary to resolve (e.g. {@link BinaryInfo#JAVAC},
+     *             {@link BinaryInfo#VNU}, {@link BinaryInfo#NODE},
+     *             {@link BinaryInfo#STYLELINT}, {@link BinaryInfo#TSC}, {@link BinaryInfo#PHP}, {@link BinaryInfo#PYTHON})
+     * @return an {@link Optional} containing the absolute executable path, or an
+     *         empty {@link Optional} if the binary is not installed
+     * @throws NullPointerException if {@code info} is {@code null}
+     */
+    public Optional<Path> getBinaryPath(BinaryInfo info) {
+        Objects.requireNonNull(info, "info");
+        BinaryStatus cached = statusCache.get(info);
+        if (cached != null) {
+            Optional<Path> resolved = cached.getResolvedPath();
+            if (resolved.isPresent()) {
+                return resolved.map(Path::toAbsolutePath);
+            }
+        }
+        return getStatus(info).getResolvedPath().map(Path::toAbsolutePath);
+    }
+
+    /**
+     * Resolves the absolute path of the {@code javac} compiler executable.
+     *
+     * @return absolute path to {@code javac} ({@code javac.exe} on Windows), or
+     *         empty if no JDK is installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getJavacPath() {
+        return getBinaryPath(BinaryInfo.JAVAC);
+    }
+
+    /**
+     * Resolves the absolute path of the Nu HTML Checker ({@code vnu.jar}) file.
+     *
+     * @return absolute path to {@code vnu.jar}, or empty if the validator is not
+     *         installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getVnuPath() {
+        return getBinaryPath(BinaryInfo.VNU);
+    }
+
+    /**
+     * Resolves the absolute path of the Node.js runtime executable.
+     *
+     * @return absolute path to {@code node} ({@code node.exe} on Windows), or
+     *         empty if Node.js is not installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getNodePath() {
+        return getBinaryPath(BinaryInfo.NODE);
+    }
+
+    /**
+     * Resolves the absolute path of the Stylelint CLI script
+     * ({@code stylelint.cmd} on Windows).
+     *
+     * @return absolute path to {@code stylelint.cmd}, or empty if Stylelint is
+     *         not installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getStylelintPath() {
+        return getBinaryPath(BinaryInfo.STYLELINT);
+    }
+
+    /**
+     * Resolves the absolute path of the TypeScript compiler CLI script
+     * ({@code tsc.cmd} on Windows).
+     *
+     * @return absolute path to {@code tsc.cmd}, or empty if TypeScript is not
+     *         installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getTscPath() {
+        return getBinaryPath(BinaryInfo.TSC);
+    }
+
+    /**
+     * Resolves the absolute path of the PHP
+     *
+     * @return absolute path to {@code php}, or empty if PHP is not
+     *         installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getPhpPath() {
+        return getBinaryPath(BinaryInfo.PHP);
+    }
+
+    /**
+     * Resolves the absolute path of the Python
+     *
+     * @return absolute path to {@code python}, or empty if python is not
+     *         installed
+     * @see #getBinaryPath(BinaryInfo)
+     */
+    public Optional<Path> getPythonPath() {
+        return getBinaryPath(BinaryInfo.PYTHON);
     }
 
     /**
@@ -218,18 +330,18 @@ public class BinaryManager {
      */
     public String getFullReport() {
         StringBuilder sb = new StringBuilder();
-        sb.append("╔══════════════════════════════════════════════════════════╗\n");
-        sb.append("║          Binary Dependency Status Report                ║\n");
-        sb.append("╠══════════════════════════════════════════════════════════╣\n");
+        sb.append("Ã¢â€¢â€Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢â€”\n");
+        sb.append("Ã¢â€¢â€˜          Binary Dependency Status Report                Ã¢â€¢â€˜\n");
+        sb.append("Ã¢â€¢Â Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â£\n");
 
         List<BinaryStatus> statuses = getAllStatuses();
         int available = 0;
         for (BinaryStatus status : statuses) {
             if (status.isAvailable()) available++;
-            sb.append("╠──────────────────────────────────────────────────────────╣\n");
+            sb.append("Ã¢â€¢Â Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€¢Â£\n");
             sb.append(status.formatReport());
         }
-        sb.append("╚══════════════════════════════════════════════════════════╝\n");
+        sb.append("Ã¢â€¢Å¡Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â\n");
         sb.append(String.format("\nSummary: %d / %d binaries available%n", available, statuses.size()));
 
         // Show enabled language summary
@@ -449,7 +561,7 @@ public class BinaryManager {
             BinaryStatus status = getStatus(info);
 
             if (status.isAvailable() && status.isVersionSatisfied()) {
-                fireInfo(info.getId(), "Already available and version satisfied – skipping.");
+                fireInfo(info.getId(), "Already available and version satisfied Ã¢â‚¬â€œ skipping.");
                 results.add(status);
                 continue;
             }

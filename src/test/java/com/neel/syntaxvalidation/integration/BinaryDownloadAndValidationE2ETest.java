@@ -35,8 +35,7 @@ import static org.assertj.core.api.Assertions.*;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class BinaryDownloadAndValidationE2ETest {
 
-    @TempDir
-    static Path installDir;
+
 
     @TempDir
     Path tempDir;
@@ -55,10 +54,9 @@ class BinaryDownloadAndValidationE2ETest {
         out("  Binary Download & Code Validation");
         out("=".repeat(70));
         out("  OS:           " + System.getProperty("os.name") + " / " + System.getProperty("os.arch"));
-        out("  Install dir:  " + installDir);
         out("=".repeat(70));
 
-        binaryManager = new BinaryManager(installDir);
+        binaryManager = new BinaryManager();
         library = new SyntaxValidationLibrary();
     }
 

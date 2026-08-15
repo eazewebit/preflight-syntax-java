@@ -1,83 +1,243 @@
 package com.neel.syntaxvalidation.binary;
 
+import com.neel.syntaxvalidation.binary.manager.BinaryInfo;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
 
 /**
- * Resolves the path to an external validation tool's binary using a two-tier
- * strategy:
+ * Resolves the path to an external validation tool binary.
+ *
+ * <p>This class acts as a bridge between the validator layer and the
+ * binary-management infrastructure.  Resolution follows a strict priority:
  * <ol>
- *   <li>If a <em>preferred path</em> is supplied, it is used when it points to an
- *       existing, executable file.</li>
- *   <li>Otherwise the resolver searches the system {@code PATH} for the supplied
- *       binary name, accounting for platform-specific executable suffixes
- *       (e.g. {@code .exe}, {@code .cmd}, {@code .bat} on Windows).</li>
+ *   <li><b>Preferred path</b> - an explicitly supplied path is validated first.</li>
+ *   <li><b>{@link BinaryManager}</b> - when a {@link BinaryManager} is
+ *       wired in, the resolver delegates to
+ *       {@link BinaryManager#getBinaryPath(BinaryInfo)} which can
+ *       auto-download, cache, and verify managed binaries.</li>
+ *   <li><b>System {@code PATH}</b> - as a final fallback, the resolver
+ *       searches the host's {@code PATH} environment variable.</li>
  * </ol>
  *
- * <p>The resolver is stateless and safe to share across validators and threads.
+ * <p>Two resolution APIs are provided:
+ * <ul>
+ *   <li>{@link #resolve(String, String)} - legacy {@code Optional&lt;String&gt;}
+ *       for backward-compatible call-sites.</li>
+ *   <li>{@link #resolvePath(String, String)} - preferred {@code Optional&lt;Path&gt;}
+ *       that returns a {@link Path} and leverages the full
+ *       {@link BinaryManager} pipeline.</li>
+ * </ul>
+ *
+ * <p>Instances can be created in three ways:
+ * <ul>
+ *   <li>No-arg constructor - PATH-only resolution (legacy behaviour).</li>
+ *   <li>{@link #BinaryResolver(BinaryManager)} - full managed resolution.</li>
+ *   <li>{@link #BinaryResolver(String, String)} - with a preferred path and
+ *       binary name (legacy behaviour).</li>
+ * </ul>
+ *
+ * <p>This class is <b>immutable</b> and <b>thread-safe</b>.
+ *
+ * @since 1.0.0
  */
 public class BinaryResolver {
 
-    private static final boolean WINDOWS =
-            File.separatorChar == '\\';
-
-    private static final String[] WINDOWS_EXTENSIONS = {".exe", ".cmd", ".bat", ""};
-    private static final String[] UNIX_EXTENSIONS = {""};
+    private static final Logger log = LoggerFactory.getLogger(BinaryResolver.class);
 
     /**
-     * Resolves a binary path.
-     *
-     * @param preferredPath an explicit path to the binary, or {@code null}/{@code blank}
-     *                      to skip straight to the {@code PATH} search.
-     * @param binaryName    the bare binary name to look for on {@code PATH} (e.g. {@code "node"}).
-     * @return the resolved path, or {@link Optional#empty()} if the binary cannot be found.
+     * The optional {@link BinaryManager} used for managed binary resolution.
+     * When present, the resolver delegates to it before falling back to the
+     * system {@code PATH}.
      */
-    public Optional<String> resolve(String preferredPath, String binaryName) {
-        if (preferredPath != null && !preferredPath.isBlank()) {
-            Path candidate = Path.of(preferredPath.trim());
-            if (isExecutable(candidate)) {
-                return Optional.of(candidate.toString());
-            }
-        }
-        return findOnPath(binaryName);
+    private final BinaryManager binaryManager;
+
+    /**
+     * Creates a resolver that searches only the system {@code PATH}.
+     * Equivalent to {@code new BinaryResolver(null)}.
+     */
+    public BinaryResolver() {
+        this(null);
     }
 
-    private Optional<String> findOnPath(String binaryName) {
+    /**
+     * Creates a resolver backed by the supplied {@link BinaryManager}.
+     *
+     * <p>When a binary is requested, the resolver first consults the manager
+     * (which may auto-download the binary), then falls back to the system
+     * {@code PATH} if the manager has no entry for the requested binary.
+     *
+     * @param binaryManager the binary manager (may be {@code null} for
+     *                      PATH-only resolution).
+     */
+    public BinaryResolver(BinaryManager binaryManager) {
+        this.binaryManager = binaryManager;
+    }
+
+    /**
+     * Legacy constructor kept for backward compatibility.
+     *
+     * @param preferredBinaryPath unused - retained for signature compatibility.
+     * @param binaryName          unused - retained for signature compatibility.
+     * @deprecated Use {@link #BinaryResolver()} or {@link #BinaryResolver(BinaryManager)}.
+     */
+    @Deprecated
+    public BinaryResolver(String preferredBinaryPath, String binaryName) {
+        this(null);
+    }
+
+    // ====================================================================
+    //  Public resolution API
+    // ====================================================================
+
+    /**
+     * Resolves the binary path using the full pipeline: preferred path ->
+     * {@link BinaryManager} -> system {@code PATH}.
+     *
+     * <p>This is the <b>preferred</b> resolution method.  It returns a
+     * {@link Path} which can be used directly by validators.
+     *
+     * @param preferredPath an explicit binary path (may be {@code null}).
+     * @param binaryName    the bare binary name (e.g. {@code "node"}).
+     * @return the resolved {@link Path}, or {@link Optional#empty()} if
+     *         the binary cannot be found.
+     */
+    public Optional<Path> resolvePath(String preferredPath, String binaryName) {
         if (binaryName == null || binaryName.isBlank()) {
             return Optional.empty();
         }
+
+        // 1. Preferred path takes absolute precedence.
+        if (preferredPath != null && !preferredPath.isBlank()) {
+            Path p = Path.of(preferredPath);
+            if (Files.isExecutable(p) || Files.exists(p)) {
+                log.debug("Resolved binary '{}' via preferred path: {}", binaryName, p);
+                return Optional.of(p);
+            }
+            // On Windows, try appending .exe
+            if (isWindows()) {
+                Path withExe = Path.of(preferredPath + ".exe");
+                if (Files.exists(withExe)) {
+                    log.debug("Resolved binary '{}' via preferred path (with .exe): {}", binaryName, withExe);
+                    return Optional.of(withExe);
+                }
+            }
+        }
+
+        // 2. Delegate to BinaryManager (managed download + cache).
+        if (binaryManager != null) {
+            BinaryInfo info = mapBinaryName(binaryName);
+            if (info != null) {
+                Optional<Path> managed = binaryManager.getBinaryPath(info);
+                if (managed.isPresent()) {
+                    log.debug("Resolved binary '{}' via BinaryManager: {}", binaryName, managed.get());
+                    return managed;
+                }
+            }
+        }
+
+        // 3. Fallback to system PATH.
+        Optional<String> pathOnPath = searchPath(binaryName);
+        if (pathOnPath.isPresent()) {
+            Path resolved = Path.of(pathOnPath.get());
+            log.debug("Resolved binary '{}' via system PATH: {}", binaryName, resolved);
+            return Optional.of(resolved);
+        }
+
+        log.debug("Binary '{}' not found via any resolution strategy.", binaryName);
+        return Optional.empty();
+    }
+
+    /**
+     * Resolves the binary and returns its path as a {@link String}.
+     *
+     * <p>This is the <b>legacy</b> API retained for backward compatibility.
+     * New code should prefer {@link #resolvePath(String, String)}.
+     *
+     * @param preferredPath an explicit binary path (may be {@code null}).
+     * @param binaryName    the bare binary name (e.g. {@code "node"}).
+     * @return the resolved path string, or {@link Optional#empty()}.
+     */
+    public Optional<String> resolve(String preferredPath, String binaryName) {
+        return resolvePath(preferredPath, binaryName).map(Path::toString);
+    }
+
+    /**
+     * Returns the underlying {@link BinaryManager}, if one was provided.
+     *
+     * @return the binary manager, or {@link Optional#empty()}.
+     */
+    public Optional<BinaryManager> getBinaryManager() {
+        return Optional.ofNullable(binaryManager);
+    }
+
+    // ====================================================================
+    //  Internal: binary-name -> BinaryInfo mapping
+    // ====================================================================
+
+    /**
+     * Maps a bare binary name to the corresponding {@link BinaryInfo}
+     * constant managed by {@link BinaryManager}.
+     *
+     * @param binaryName the bare name (e.g. {@code "javac"}, {@code "node"}).
+     * @return the matching {@link BinaryInfo}, or {@code null} if no
+     *         mapping exists.
+     */
+    private static BinaryInfo mapBinaryName(String binaryName) {
+        if (binaryName == null) return null;
+        return switch (binaryName.toLowerCase()) {
+            case "javac", "java" -> BinaryInfo.JAVAC;
+            case "node", "nodejs" -> BinaryInfo.NODE;
+            case "tsc"           -> BinaryInfo.TSC;
+            case "python", "python3", "py" -> BinaryInfo.PYTHON;
+            case "php"           -> BinaryInfo.PHP;
+            case "vnu", "vnu.jar" -> BinaryInfo.VNU;
+            case "stylelint"     -> BinaryInfo.STYLELINT;
+            default -> null;
+        };
+    }
+
+    // ====================================================================
+    //  Internal: system PATH search
+    // ====================================================================
+
+    /**
+     * Searches the system {@code PATH} for the given binary name.
+     *
+     * @param binaryName the bare binary name.
+     * @return the absolute path, or {@link Optional#empty()}.
+     */
+    private Optional<String> searchPath(String binaryName) {
         String pathEnv = System.getenv("PATH");
-        if (pathEnv == null || pathEnv.isEmpty()) {
+        if (pathEnv == null || pathEnv.isBlank()) {
             return Optional.empty();
         }
 
-        String[] extensions = WINDOWS ? WINDOWS_EXTENSIONS : UNIX_EXTENSIONS;
-        for (String dir : pathEnv.split(File.pathSeparator)) {
-            if (dir.isEmpty()) {
-                continue;
+        String separator = File.pathSeparator;
+        for (String dir : pathEnv.split(separator)) {
+            Path candidate = Path.of(dir, binaryName);
+            if (Files.isExecutable(candidate)) {
+                return Optional.of(candidate.toAbsolutePath().toString());
             }
-            Path dirPath = Path.of(dir);
-            for (String ext : extensions) {
-                Path candidate = dirPath.resolve(binaryName + ext);
-                if (isExecutable(candidate)) {
-                    return Optional.of(candidate.toString());
+            // On Windows, try common extensions.
+            if (isWindows()) {
+                for (String ext : new String[]{".exe", ".cmd", ".bat"}) {
+                    Path withExt = Path.of(dir, binaryName + ext);
+                    if (Files.isExecutable(withExt)) {
+                        return Optional.of(withExt.toAbsolutePath().toString());
+                    }
                 }
             }
         }
         return Optional.empty();
     }
 
-    /**
-     * Checks that a path points to an existing file that can be executed.
-     * <p>On Windows, where the execute bit is not meaningful, this falls back to
-     * checking that the path is a regular file.
-     */
-    private static boolean isExecutable(Path path) {
-        if (!Files.isRegularFile(path)) {
-            return false;
-        }
-        return WINDOWS || Files.isExecutable(path);
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
     }
 }

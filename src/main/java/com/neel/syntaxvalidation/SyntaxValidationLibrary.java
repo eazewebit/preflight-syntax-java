@@ -1,5 +1,6 @@
 package com.neel.syntaxvalidation;
 
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.cache.FileCache;
 import com.neel.syntaxvalidation.cache.FileCacheEntry;
 import com.neel.syntaxvalidation.model.Language;
@@ -12,7 +13,9 @@ import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.List;
@@ -35,6 +38,19 @@ import java.util.Optional;
  * <p>The class is thread-safe: the {@link FileCache} and {@link ValidatorFactory}
  * collaborators are themselves thread-safe and the library holds no mutable
  * per-invocation state.
+ *
+ * <h2>Binary management</h2>
+ * <p>By default, the library creates a {@link BinaryManager} pointed at
+ * {@code ~/.code-verification-binaries} (or the equivalent on the host OS).
+ * The manager auto-downloads, caches and version-checks external validation
+ * binaries (javac, node, tsc, python, php, vnu, stylelint). Validators
+ * receive the manager through the {@link ValidatorFactory}, so
+ * {@link com.neel.syntaxvalidation.binary.BinaryResolver} automatically
+ * delegates to it before falling back to the system {@code PATH}.
+ *
+ * <p>Callers who need a custom install directory or who want to supply a
+ * pre-built {@link BinaryManager} (e.g. for testing) should use
+ * {@link #SyntaxValidationLibrary(BinaryManager)}.
  */
 public class SyntaxValidationLibrary {
 
@@ -46,22 +62,74 @@ public class SyntaxValidationLibrary {
     private final FileCache fileCache;
     private final ValidatorFactory validatorFactory;
     private final ModificationApplier modificationApplier;
+    private final BinaryManager binaryManager;
 
-    /** Creates a library with default collaborators and the JavaScript validator enabled. */
+    /**
+     * Creates a library with default collaborators and a {@link BinaryManager}
+     * rooted at the default install directory ({@code ~/.code-verification-binaries}).
+     */
     public SyntaxValidationLibrary() {
-        this(new ValidatorFactory());
+        this(createDefaultBinaryManager());
     }
 
     /**
-     * Creates a library backed by the supplied validator factory, allowing callers
-     * to register pre-configured validators (e.g. with custom binary paths).
+     * Creates a library backed by the supplied {@link BinaryManager}.
+     *
+     * <p>If the manager is {@code null}, a default one is created at the
+     * standard install directory. The manager is injected into the
+     * {@link ValidatorFactory}, so all validators produced by the factory
+     * use it for binary resolution.
+     *
+     * @param binaryManager the binary manager (may be {@code null} for the
+     *                      default install directory).
+     */
+    public SyntaxValidationLibrary(BinaryManager binaryManager) {
+        this.binaryManager = binaryManager != null ? binaryManager : createDefaultBinaryManager();
+        this.validatorFactory = new ValidatorFactory(this.binaryManager);
+        this.fileCache = new FileCache();
+        this.modificationApplier = new ModificationApplier();
+    }
+
+    /**
+     * Creates a library backed by the supplied validator factory, allowing
+     * callers to register pre-configured validators (e.g. with custom binary
+     * paths).
+     *
+     * <p>The {@link BinaryManager} is extracted from the factory.
      *
      * @param validatorFactory the factory providing language validators.
      */
     public SyntaxValidationLibrary(ValidatorFactory validatorFactory) {
-        this.fileCache = new FileCache();
         this.validatorFactory = validatorFactory;
+        this.binaryManager = validatorFactory.getBinaryManager();
+        this.fileCache = new FileCache();
         this.modificationApplier = new ModificationApplier();
+    }
+
+    public static void main(String[] args) throws IOException {
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        ModificationRequest modificationRequest
+                = ModificationRequest.builder()
+                        .filePath("C:\\Users\\njpollob\\Documents\\test-ai-tool\\html\\invalid\\unclosed_tag.html")
+                                .fromLine(9)
+                                        .toLine(36)
+                                                .replacement("<div>This should be valid</div>")
+                                                        .build();
+        ValidationResult result = library.validateMixedContent(modificationRequest);
+
+        System.out.println(result);
+
+    }
+
+    /**
+     * Returns the {@link BinaryManager} used by this library to resolve
+     * external validation binaries.
+     *
+     * @return the binary manager (never {@code null}).
+     */
+    public BinaryManager getBinaryManager() {
+        return binaryManager;
     }
 
     /**
@@ -204,5 +272,23 @@ public class SyntaxValidationLibrary {
     /** Removes every cached file entry. */
     public void clearCache() {
         fileCache.clear();
+    }
+
+    // ====================================================================
+    //  Internal helpers
+    // ====================================================================
+
+    /**
+     * Creates a {@link BinaryManager} at the default install directory.
+     */
+    private static BinaryManager createDefaultBinaryManager() {
+        try {
+            BinaryManager manager = new BinaryManager();
+            log.info("Created default BinaryManager at: {}", manager.getInstallDir());
+            return manager;
+        } catch (IOException e) {
+            log.error("Failed to create default BinaryManager: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to create default BinaryManager", e);
+        }
     }
 }

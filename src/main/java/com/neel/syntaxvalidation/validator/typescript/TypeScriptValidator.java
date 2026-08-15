@@ -1,6 +1,7 @@
 package com.neel.syntaxvalidation.validator.typescript;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationError;
 import com.neel.syntaxvalidation.model.ValidationResult;
@@ -25,10 +26,10 @@ import java.util.Optional;
  *
  * <h2>Phase 2 &mdash; {@code tsc} deep analysis (when available)</h2>
  * If the pure-Java engine reports no errors and a {@code tsc} binary is
- * resolvable &mdash; either from an explicitly supplied preferred path or from
- * the system {@code PATH} &mdash; the source is validated using the TypeScript
- * compiler with {@code --noEmit} for full type-aware syntax checking.
- * The code is never executed.
+ * resolvable &mdash; either from an explicitly supplied preferred path, from a
+ * {@link BinaryManager}, or from the system {@code PATH} &mdash; the source
+ * is validated using the TypeScript compiler with {@code --noEmit} for full
+ * type-aware syntax checking. The code is never executed.
  *
  * <p>If the TypeScript compiler is unavailable, the clean result from
  * phase&nbsp;1 stands, ensuring the validator always provides a best-effort
@@ -78,6 +79,27 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
     }
 
     /**
+     * Creates a validator backed by a {@link BinaryManager} for managed binary
+     * resolution (download, cache, version-check).
+     *
+     * @param binaryManager the binary manager (may be {@code null} for
+     *                      PATH-only resolution).
+     */
+    public TypeScriptValidator(BinaryManager binaryManager) {
+        this(null, binaryManager, new ProcessExecutor(), false);
+    }
+
+    /**
+     * Creates a validator backed by a {@link BinaryManager} in JSX mode.
+     *
+     * @param binaryManager the binary manager (may be {@code null}).
+     * @return a new TypeScriptValidator configured for JSX/TSX files.
+     */
+    public static TypeScriptValidator createJsxValidator(BinaryManager binaryManager) {
+        return new TypeScriptValidator(null, binaryManager, new ProcessExecutor(), true);
+    }
+
+    /**
      * Creates a validator with explicit components for testing.
      *
      * @param preferredBinaryPath an explicit path to a {@code tsc} executable,
@@ -89,6 +111,26 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
     protected TypeScriptValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
                        ProcessExecutor processExecutor, boolean jsxMode) {
         super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
+        this.syntaxEngine = new TypeScriptSyntaxEngine();
+        this.outputParser = new TscOutputParser();
+        this.jsxMode = jsxMode;
+        if (jsxMode) {
+            syntaxEngine.enableJsxMode();
+        }
+    }
+
+    /**
+     * Creates a validator backed by a {@link BinaryManager} with explicit
+     * components.
+     *
+     * @param preferredBinaryPath an explicit binary path, or {@code null}.
+     * @param binaryManager       the binary manager (may be {@code null}).
+     * @param processExecutor     the process executor to use.
+     * @param jsxMode             whether to enable JSX mode for TSX/JSX files.
+     */
+    protected TypeScriptValidator(String preferredBinaryPath, BinaryManager binaryManager,
+                       ProcessExecutor processExecutor, boolean jsxMode) {
+        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
         this.syntaxEngine = new TypeScriptSyntaxEngine();
         this.outputParser = new TscOutputParser();
         this.jsxMode = jsxMode;

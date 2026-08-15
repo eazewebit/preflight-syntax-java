@@ -33,7 +33,7 @@ class BinaryDownloadTest {
     void setUp() throws IOException {
         downloadDir = tempDir.resolve("downloads");
         Files.createDirectories(downloadDir);
-        manager = new BinaryManager(downloadDir);
+        manager = new BinaryManager();
     }
 
     // ======================================================
@@ -618,23 +618,6 @@ class BinaryDownloadTest {
     @Nested
     @DisplayName("Error Handling")
     class ErrorHandlingTests {
-
-        @Test
-        @DisplayName("Should handle invalid download directory")
-        void shouldHandleInvalidDownloadDirectory() throws IOException {
-            Path invalidDir = tempDir.resolve("nonexistent").resolve("deep").resolve("path");
-            
-            BinaryManager invalidManager = new BinaryManager(invalidDir);
-            assertThat(invalidManager).isNotNull();
-        }
-
-        @Test
-        @DisplayName("Should handle null parameters")
-        void shouldHandleNullParameters() {
-            assertThatNullPointerException().isThrownBy(() -> {
-                new BinaryManager(null);
-            });
-        }
 
         @Test
         @DisplayName("Should handle download of binary with URL")

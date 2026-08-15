@@ -1,6 +1,7 @@
 package com.neel.syntaxvalidation.validator.java;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationError;
 import com.neel.syntaxvalidation.model.ValidationResult;
@@ -21,33 +22,21 @@ import java.util.regex.Pattern;
 /**
  * Validates Java source code using a two-phase, non-executing strategy.
  *
- * <h2>Phase 1 &mdash; built-in {@link JavaSyntaxEngine} (always runs)</h2>
- * A fast, dependency-free structural pass tokenises the source and runs a
- * pipeline of isolated {@code checker} components. This catches lexical
- * anomalies, delimiter imbalance and obvious keyword misuse with zero external
- * dependencies.
+ * <h2>Phase 1 - built-in JavaSyntaxEngine (always runs)</h2>
+ * A fast, dependency-free structural pass.
  *
- * <h2>Phase 2 &mdash; {@code javac} deep analysis (when available)</h2>
- * If the pure-Java engine reports no errors and a {@code javac} binary is
- * resolvable &mdash; either from an explicitly supplied preferred path or from
- * the system {@code PATH} &mdash; the source is compiled to a temporary
- * directory with {@code -proc:none} (annotation processing disabled) so that
+ * <h2>Phase 2 - javac deep analysis (when available)</h2>
+ * If the pure-Java engine reports no errors and a javac binary is resolvable,
+ * the source is compiled to a temporary directory with -proc:none so that
  * the full Java compiler front-end can surface semantic and residual syntax
  * errors. The code is never executed.
  *
- * <p>If {@code javac} is unavailable, the clean result from phase&nbsp;1 stands,
- * ensuring the validator always provides a best-effort answer.
- *
- * <p>This class is the public entry point for Java validation and is registered
- * in the {@link com.neel.syntaxvalidation.validator.ValidatorFactory
- * ValidatorFactory}.
+ * If javac is unavailable, the clean result from phase 1 stands.
  */
 public class JavaValidator extends AbstractLanguageValidator implements LanguageValidator {
 
-    /** The bare binary name searched on {@code PATH}. */
     static final String BINARY_NAME = "javac";
 
-    /** Pattern to extract the public class name from Java source code. */
     private static final Pattern PUBLIC_CLASS_PATTERN =
             Pattern.compile("public\\s+class\\s+(\\w+)");
 
@@ -55,27 +44,36 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
     private static final JavaSyntaxEngine ENGINE = new JavaSyntaxEngine();
 
     /**
-     * Creates a validator that resolves {@code javac} from the system
-     * {@code PATH}.
+     * Creates a validator that resolves javac from the system PATH.
      */
     public JavaValidator() {
-        this(null);
+        this((String) null);
     }
 
     /**
      * Creates a validator with an explicit preferred binary path.
      *
-     * @param preferredBinaryPath an explicit path to a {@code javac} executable,
-     *                            or {@code null} to search the {@code PATH}.
+     * @param preferredBinaryPath an explicit path to a javac executable,
+     *                            or null to search the PATH.
      */
     public JavaValidator(String preferredBinaryPath) {
         super(preferredBinaryPath, BINARY_NAME);
     }
 
     /**
+     * Creates a validator backed by a BinaryManager for managed binary
+     * resolution (download, cache, version-check).
+     *
+     * @param binaryManager the binary manager (may be null for PATH-only resolution).
+     */
+    public JavaValidator(BinaryManager binaryManager) {
+        super(null, BINARY_NAME, binaryManager, new ProcessExecutor());
+    }
+
+    /**
      * Creates a validator with explicit collaborators, primarily for testing.
      *
-     * @param preferredBinaryPath an explicit binary path, or {@code null}.
+     * @param preferredBinaryPath an explicit binary path, or null.
      * @param binaryResolver      the binary resolver to use.
      * @param processExecutor     the process executor to use.
      */
@@ -86,27 +84,18 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
 
     /**
      * Two-phase validation.
-     *
-     * <ol>
-     *   <li>Run the built-in {@link JavaSyntaxEngine}. If it reports errors,
-     *       return them immediately &mdash; no external process is needed.</li>
-     *   <li>If the engine passes and {@code javac} is available, delegate to
-     *       {@code super.validate()} (which invokes {@code javac}) for deeper
-     *       analysis.</li>
-     *   <li>If {@code javac} is unavailable, the engine's clean result stands.</li>
-     * </ol>
      */
     @Override
     public ValidationResult validate(String content) {
         String safeContent = content == null ? "" : content;
 
-        // Phase 1 — built-in Java syntax engine (always runs, zero external deps)
+        // Phase 1 - built-in Java syntax engine
         ValidationResult engineResult = JavaSyntaxEngine.validateStatic(safeContent);
         if (!engineResult.isValid()) {
             return engineResult;
         }
 
-        // Phase 2 — javac deep analysis (when available)
+        // Phase 2 - javac deep analysis (when available)
         Optional<String> binary = resolveBinary();
         if (binary.isEmpty()) {
             return ValidationResult.valid(
@@ -114,32 +103,15 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
                             + "javac not available for deeper analysis).");
         }
 
-        // javac available — strip 'public' from class declarations to avoid
-        // "class X is public, should be declared in a file named X.java" errors
-        // when validating with temp files that have generic names.
         String javacContent = stripPublicModifier(safeContent);
         return super.validate(javacContent);
     }
 
     /**
-     * Strips the 'public' modifier from class declarations in Java source code.
-     * This prevents javac from reporting "class X is public, should be declared in a file named X.java" errors
-     * when validating with temp files that have generic names.
-     *
-     * @param content the Java source code
-     * @return the modified source code with 'public' removed from class declarations
-     */
-    private String stripPublicModifier(String content) {
-        // Replace "public class" with "class" (handles various whitespace patterns)
-        return content.replaceAll("(?m)^\\s*public\\s+class\\s+", "class ");
-    }
-
-    /**
-     * Validates a Java source string directly using only the built-in syntax
-     * engine (no file I/O, no external binary).
+     * Validates a Java source string directly using only the built-in syntax engine.
      *
      * @param source the Java source code to validate.
-     * @return the {@link ValidationResult}.
+     * @return the ValidationResult.
      */
     public ValidationResult validateSource(String source) {
         return JavaSyntaxEngine.validateStatic(source == null ? "" : source);
@@ -155,32 +127,20 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
         return ".java";
     }
 
-    /**
-     * Creates a temp file with a name derived from the public class in the content.
-     * If no public class is found, falls back to the default temp file creation.
-     * This ensures javac doesn't report "class X is public, should be declared in a file named X.java" errors.
-     *
-     * @param content the Java source content to extract the public class name from
-     * @return the path to the created temp file
-     * @throws IOException if an I/O error occurs
-     */
+    private String stripPublicModifier(String content) {
+        return content.replaceAll("(?m)^\\s*public\\s+class\\s+", "class ");
+    }
+
     protected Path createTempFile(String content) throws IOException {
         String publicClassName = extractPublicClassName(content);
         if (publicClassName != null) {
-            // Create temp file with the public class name to satisfy javac's requirement
             Path tempDir = Files.createTempDirectory("java-syntax-check-");
             return tempDir.resolve(publicClassName + ".java");
         } else {
-            // No public class — use default temp file creation
             return createTempFile();
         }
     }
 
-    /**
-     * Extracts the public class name from Java source code.
-     * @param content the Java source code
-     * @return the public class name, or null if no public class found
-     */
     private String extractPublicClassName(String content) {
         Matcher matcher = PUBLIC_CLASS_PATTERN.matcher(content);
         if (matcher.find()) {
@@ -191,9 +151,6 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
 
     @Override
     protected List<String> buildCommand(String binaryPath, Path tempFile) {
-        // -proc:none    disables annotation processing (faster, fewer deps).
-        // -nowarn       suppresses warnings; we only care about errors.
-        // -d /dev/null  compiles to a throwaway location; the code is never executed.
         return List.of(binaryPath, "-proc:none", "-nowarn", "-d", tempDirFlag(), tempFile.toString());
     }
 
@@ -205,7 +162,6 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
                     new ValidationError(-1, -1, "The javac process did not finish in time.", result.stderr()));
         }
 
-        // javac writes diagnostics to stderr.
         String output = result.stderr();
         if (output == null || output.isBlank()) {
             output = result.stdout();
@@ -216,12 +172,10 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
             return parsed;
         }
 
-        // Exit code 0 with no parseable errors means the file is syntactically valid.
         if (result.succeeded()) {
             return ValidationResult.valid("Java syntax is valid.");
         }
 
-        // Non-zero exit but nothing parseable — surface a generic failure.
         String message = (output == null || output.isBlank())
                 ? "javac exited with code " + result.exitCode() + " but produced no diagnostic output."
                 : output.trim();
@@ -237,14 +191,6 @@ public class JavaValidator extends AbstractLanguageValidator implements Language
                 + "Falling back to the built-in Java syntax engine.";
     }
 
-    /**
-     * Returns the platform-appropriate throwaway compilation target.
-     *
-     * <p>On POSIX systems {@code /dev/null} is a valid directory argument;
-     * on Windows a real temporary directory is created implicitly by javac.
-     * To keep things simple and portable we always compile into the system
-     * temp directory, which is cleaned up by the OS.
-     */
     private String tempDirFlag() {
         return System.getProperty("java.io.tmpdir");
     }

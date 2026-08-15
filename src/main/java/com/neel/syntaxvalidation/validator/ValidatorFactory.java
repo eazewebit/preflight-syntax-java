@@ -1,125 +1,147 @@
 package com.neel.syntaxvalidation.validator;
 
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.Language;
+import com.neel.syntaxvalidation.process.ProcessExecutor;
 import com.neel.syntaxvalidation.validator.css.CssValidator;
 import com.neel.syntaxvalidation.validator.html.HtmlValidator;
 import com.neel.syntaxvalidation.validator.java.JavaValidator;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
-import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import com.neel.syntaxvalidation.validator.php.PhpValidator;
 import com.neel.syntaxvalidation.validator.python.PythonValidator;
 import com.neel.syntaxvalidation.validator.typescript.TypeScriptValidator;
+import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * A simple factory that maps a {@link Language} to the corresponding
- * {@link LanguageValidator} implementation.
+ * Factory responsible for creating and caching {@link LanguageValidator} instances.
  *
- * <p>The factory is pre-populated with all built-in validators and supports
- * registering additional custom validators at runtime via
- * {@link #register(Language, LanguageValidator)}.
+ * <p>This class owns the lifecycle of validator instances, ensuring they are
+ * created once and reused across validation requests. It also owns the
+ * {@link BinaryManager} that provides auto-download, caching and
+ * version-checking of external validation binaries (javac, node, tsc, python,
+ * php, vnu, stylelint).
  *
- * <h2>Built-in validators</h2>
- * <ul>
- *   <li>{@link Language#JAVASCRIPT} &rarr; {@link JavaScriptValidator}</li>
- *   <li>{@link Language#TYPESCRIPT} &rarr; {@link TypeScriptValidator}</li>
- *   <li>{@link Language#HTML}       &rarr; {@link HtmlValidator}</li>
- *   <li>{@link Language#CSS}        &rarr; {@link CssValidator}</li>
- *   <li>{@link Language#PHP}        &rarr; {@link PhpValidator}</li>
- *   <li>{@link Language#JAVA}       &rarr; {@link JavaValidator}</li>
- *   <li>{@link Language#PYTHON}     &rarr; {@link PythonValidator}</li>
- * </ul>
- *
- * <p><b>Thread-safety.</b> This class is safe for concurrent reads from
- * multiple threads after initial construction. Mutation via
- * {@link #register(Language, LanguageValidator)} is <em>not</em> thread-safe
- * and should only be called during application startup.
+ * <p>A single {@link ProcessExecutor} is shared across all validators produced
+ * by the factory.
  */
 public final class ValidatorFactory {
 
-    private final Map<Language, LanguageValidator> validators =
-            new EnumMap<>(Language.class);
+    private static final Set<Language> SUPPORTED_LANGUAGES =
+            Collections.unmodifiableSet(Arrays.stream(Language.values()).collect(Collectors.toSet()));
+
+    private final Map<Language, LanguageValidator> validators = new EnumMap<>(Language.class);
+    private final ProcessExecutor processExecutor;
+    private final BinaryManager binaryManager;
 
     /**
-     * Creates a new factory with all built-in validators registered.
+     * Creates a factory with default collaborators.
+     * When no BinaryManager is supplied, validators fall back to resolving binaries from the system PATH.
      */
     public ValidatorFactory() {
-        this(true);
+        this(null, new ProcessExecutor());
     }
 
     /**
-     * Creates a new factory, optionally registering built-in validators.
+     * Creates a factory backed by a BinaryManager.
+     * All validators produced by this factory will use the supplied manager
+     * to resolve external binaries (with automatic download and caching).
      *
-     * @param registerBuiltins {@code true} to register the built-in
-     *                         JavaScript, HTML, CSS, PHP, Java, and Python validators;
-     *                         {@code false} for an empty factory.
+     * @param binaryManager the binary manager, or null for PATH-only resolution
      */
-    public ValidatorFactory(boolean registerBuiltins) {
-        if (registerBuiltins) {
-            validators.put(Language.JAVASCRIPT, new JavaScriptValidator());
-            validators.put(Language.HTML, new HtmlValidator());
-            validators.put(Language.CSS, new CssValidator());
-            validators.put(Language.PHP, new PhpValidator());
-            validators.put(Language.JAVA, new JavaValidator());
-            validators.put(Language.PYTHON, new PythonValidator(
-                    new com.neel.syntaxvalidation.binary.BinaryResolver(),
-                    new com.neel.syntaxvalidation.process.ProcessExecutor()));
-            validators.put(Language.TYPESCRIPT, new TypeScriptValidator(Language.TYPESCRIPT));
-        }
+    public ValidatorFactory(BinaryManager binaryManager) {
+        this(binaryManager, new ProcessExecutor());
     }
 
     /**
-     * Returns the {@link LanguageValidator} for the given language, if one is
-     * registered.
+     * Creates a factory with explicit collaborators, primarily for testing.
      *
-     * @param language the language to look up.
-     * @return an {@link Optional} containing the validator, or empty if no
-     *         validator is registered for the given language.
-     * @throws NullPointerException if {@code language} is {@code null}.
+     * @param binaryManager   the binary manager, or null
+     * @param processExecutor the process executor
+     */
+    public ValidatorFactory(BinaryManager binaryManager, ProcessExecutor processExecutor) {
+        this.binaryManager = binaryManager;
+        this.processExecutor = Objects.requireNonNull(processExecutor, "processExecutor");
+    }
+
+    /**
+     * Returns a validator for the specified language, creating it if it does not yet exist.
+     *
+     * @param language the target language
+     * @return an optional containing the validator
      */
     public Optional<LanguageValidator> getValidator(Language language) {
-        return Optional.ofNullable(validators.get(language));
+        Objects.requireNonNull(language, "language");
+        return Optional.of(validators.computeIfAbsent(language, this::newValidator));
     }
 
     /**
-     * Registers (or replaces) a validator for a given language.
+     * Registers a custom validator for the given language, replacing any existing one.
      *
-     * @param language  the language.
-     * @param validator the validator to associate with the language.
-     * @throws NullPointerException if either argument is {@code null}.
+     * @param language  the language to register
+     * @param validator the validator
      */
     public void register(Language language, LanguageValidator validator) {
+        Objects.requireNonNull(language, "language");
+        Objects.requireNonNull(validator, "validator");
         validators.put(language, validator);
     }
 
     /**
-     * Returns the set of languages for which a validator is currently
-     * registered.
+     * Returns the set of all supported languages.
      *
-     * @return an unmodifiable set of registered languages.
+     * @return unmodifiable set of supported languages
      */
-    public java.util.Set<Language> supportedLanguages() {
-        return java.util.Collections.unmodifiableSet(validators.keySet());
+    public Set<Language> supportedLanguages() {
+        return SUPPORTED_LANGUAGES;
     }
 
     /**
-     * Creates a new {@link MixedContentValidator} for comprehensive
-     * validation of HTML documents that contain embedded CSS and JavaScript.
+     * Creates a new validator for the specified language (not cached).
      *
-     * <p>The mixed-content validator uses the Nu Html Checker (vnu.jar) for
-     * HTML structural validation (when available), the CSS syntax engine for
-     * {@code <style>} content, and the JavaScript syntax engine for
-     * {@code <script>} content.
+     * @param language the target language
+     * @return a new LanguageValidator
+     */
+    public LanguageValidator create(Language language) {
+        Objects.requireNonNull(language, "language");
+        return newValidator(language);
+    }
+
+    /**
+     * Returns a MixedContentValidator for HTML files containing embedded CSS and JavaScript.
      *
-     * <p>This method always creates a fresh instance. If you need a
-     * singleton, cache the returned value.
-     *
-     * @return a new {@link MixedContentValidator}.
+     * @return a mixed-content validator
      */
     public MixedContentValidator getMixedContentValidator() {
         return new MixedContentValidator();
+    }
+
+    /**
+     * Returns the underlying BinaryManager, or null if not configured.
+     *
+     * @return the binary manager
+     */
+    public BinaryManager getBinaryManager() {
+        return binaryManager;
+    }
+
+    private LanguageValidator newValidator(Language language) {
+        return switch (language) {
+            case JAVA       -> new JavaValidator(binaryManager);
+            case JAVASCRIPT -> new JavaScriptValidator(binaryManager);
+            case TYPESCRIPT -> new TypeScriptValidator(binaryManager);
+            case PYTHON     -> new PythonValidator(binaryManager, processExecutor);
+            case PHP        -> new PhpValidator(binaryManager, processExecutor);
+            case HTML       -> new HtmlValidator(binaryManager);
+            case CSS        -> new CssValidator(binaryManager);
+        };
     }
 }

@@ -1,6 +1,7 @@
 package com.neel.syntaxvalidation.validator.javascript;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.ValidationError;
 import com.neel.syntaxvalidation.model.ValidationResult;
@@ -23,10 +24,12 @@ import java.util.Optional;
  * If the engine detects errors they are returned immediately.
  *
  * <h2>Phase 2 &mdash; Node.js deep analysis</h2>
- * When Node.js is available on the system, the full {@code node --check} pipeline
- * runs as a second pass, catching subtler semantic-adjacent syntax errors that a
- * pure-Java engine cannot reasonably detect (e.g. duplicate parameter names,
- * invalid label syntax, or contextual grammar violations).
+ * When Node.js is available on the system &mdash; either from an explicitly
+ * supplied preferred path, from a {@link BinaryManager}, or from the system
+ * {@code PATH} &mdash; the full {@code node --check} pipeline runs as a second
+ * pass, catching subtler semantic-adjacent syntax errors that a pure-Java engine
+ * cannot reasonably detect (e.g. duplicate parameter names, invalid label
+ * syntax, or contextual grammar violations).
  *
  * <p>If Node.js is <em>not</em> available, the built-in engine's clean result
  * stands on its own, providing meaningful syntax validation in any environment.
@@ -46,7 +49,7 @@ public class JavaScriptValidator extends AbstractLanguageValidator {
      * Creates a validator that resolves {@code node} from the system {@code PATH}.
      */
     public JavaScriptValidator() {
-        this(null);
+        this((String) null);
     }
 
     /**
@@ -68,6 +71,30 @@ public class JavaScriptValidator extends AbstractLanguageValidator {
     public JavaScriptValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
                                ProcessExecutor processExecutor) {
         super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
+    }
+
+    /**
+     * Creates a validator backed by a {@link BinaryManager} for managed binary
+     * resolution (download, cache, version-check).
+     *
+     * @param binaryManager the binary manager (may be {@code null} for
+     *                      PATH-only resolution).
+     */
+    public JavaScriptValidator(BinaryManager binaryManager) {
+        super(null, BINARY_NAME, binaryManager, new ProcessExecutor());
+    }
+
+    /**
+     * Creates a validator backed by a {@link BinaryManager} with an explicit
+     * preferred path and process executor.
+     *
+     * @param preferredBinaryPath an explicit binary path, or {@code null}.
+     * @param binaryManager       the binary manager (may be {@code null}).
+     * @param processExecutor     the process executor to use.
+     */
+    public JavaScriptValidator(String preferredBinaryPath, BinaryManager binaryManager,
+                               ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
     }
 
     @Override

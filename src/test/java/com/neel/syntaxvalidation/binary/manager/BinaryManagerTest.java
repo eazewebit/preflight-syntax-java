@@ -24,7 +24,7 @@ class BinaryManagerTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        manager = new BinaryManager(tempDir);
+        manager = new BinaryManager();
     }
 
     // ================================================================
@@ -119,7 +119,7 @@ class BinaryManagerTest {
     void shouldCreateInstallDirectory() throws IOException {
         Path newDir = tempDir.resolve("new-install");
         assertThat(Files.exists(newDir)).isFalse();
-        BinaryManager mgr = new BinaryManager(newDir);
+        BinaryManager mgr = new BinaryManager();
         assertThat(Files.exists(newDir)).isTrue();
         assertThat(mgr.getInstallDir()).isEqualTo(newDir);
     }
@@ -127,7 +127,7 @@ class BinaryManagerTest {
     @Test
     @DisplayName("BinaryManager should reject null install dir")
     void shouldRejectNullInstallDir() {
-        assertThatThrownBy(() -> new BinaryManager(null))
+        assertThatThrownBy(BinaryManager::new)
                 .isInstanceOf(NullPointerException.class);
     }
 
