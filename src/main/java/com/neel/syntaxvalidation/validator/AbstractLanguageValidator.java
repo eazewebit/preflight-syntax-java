@@ -177,45 +177,33 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
      * @param message  the log message
      */
     protected void logValidationPhase(String language, int phase, String message) {
-        log.debug("{} validation - Phase {}: {}", language, phase, message);
+        log.debug("[PHASE-{}] {} validation: {}", phase, language, message);
     }
 
     /**
-     * Logs when built-in engine fallback is used.
+     * Logs a warning when falling back to built-in engine.
      *
      * @param language the language being validated
      * @param reason   the reason for fallback
      */
     protected void logBuiltInEngineFallback(String language, String reason) {
-        log.info("{} validation: Using built-in engine fallback. Reason: {}", language, reason);
+        log.warn("[PHASE-2-FALLBACK] {} validation: {}", language, reason);
     }
 
     /**
-     * Optional hook for subclasses that have a built-in syntax engine.
-     * When binary validation is unavailable or fails, this method is called
-     * as a fallback.
+     * Hook method for subclasses to prepare the temporary directory before
+     * the source file is written. This is useful for validators that need
+     * additional files in the temp directory (e.g., configuration files).
      *
-     * <p>Default implementation returns {@code null}, indicating no built-in
-     * engine is available. Subclasses with built-in engines should override
-     * this method.
+     * <p>Default implementation does nothing. Subclasses can override this
+     * to create configuration files, setup scripts, or other resources
+     * needed by the external tool.
      *
-     * @param content the content to validate
-     * @return ValidationResult from the built-in engine, or null if no built-in engine
+     * @param tempDir the temporary directory that was created
+     * @throws IOException if preparation fails
      */
-    protected ValidationResult validateWithBuiltInEngine(String content) {
-        return null;
-    }
-
-    /**
-     * Two-phase validation using a default filename derived from
-     * {@link #getFileExtension()}.
-     *
-     * <p>Delegates to {@link #validate(String, String)} with a filename of
-     * {@code "source" + getFileExtension()}.
-     */
-    @Override
-    public ValidationResult validate(String content) {
-        return validate(content, "source" + getFileExtension());
+    protected void prepareTempDirectory(Path tempDir) throws IOException {
+        // No-op by default
     }
 
     /**
@@ -249,6 +237,7 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
             Path tempDir = null;
             try {
                 tempDir = Files.createTempDirectory("syntax-check-");
+                prepareTempDirectory(tempDir);
                 Path tempFile = tempDir.resolve(fileName);
                 Files.writeString(tempFile, safeContent, StandardCharsets.UTF_8);
                 List<String> command = buildCommand(binaryPath, tempFile);
@@ -301,6 +290,18 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
     }
 
     /**
+     * Two-phase validation using a default filename derived from
+     * {@link #getFileExtension()}.
+     *
+     * <p>Delegates to {@link #validate(String, String)} with a filename of
+     * {@code "source" + getFileExtension()}.
+     */
+    @Override
+    public ValidationResult validate(String content) {
+        return validate(content, "source" + getFileExtension());
+    }
+
+    /**
      * Returns the file extension (including the dot) used for temporary files.
      *
      * @return e.g. {@code ".java"}, {@code ".py"}.
@@ -324,6 +325,20 @@ public abstract class AbstractLanguageValidator implements LanguageValidator {
      * @return a structured {@link ValidationResult}.
      */
     protected abstract ValidationResult parseOutput(ProcessResult result, Path tempFile);
+
+    /**
+     * Built-in engine validation (Phase 2 fallback).
+     *
+     * <p>Default implementation returns {@code null}, indicating no built-in
+     * engine is available. Subclasses with built-in engines should override
+     * this method.
+     *
+     * @param content the content to validate
+     * @return ValidationResult from the built-in engine, or null if no built-in engine
+     */
+    protected ValidationResult validateWithBuiltInEngine(String content) {
+        return null;
+    }
 
     /**
      * @return the explanation returned when the validation tool cannot be located.

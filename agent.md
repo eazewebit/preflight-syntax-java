@@ -589,3 +589,57 @@ private ValidationResult remapLineNumbers(ValidationResult result, ExtractedBloc
 - **`MixedContentSyntaxEngine` always validates all four dimensions** (HTML, CSS, JS, PHP) regardless of which are present; missing dimensions simply produce no errors.
 - **PHP engine supports PHP 8.0+ attributes** (`#[Route('/api')]`), **readonly classes**, **match expressions**, **union/intersection/DNF types**, **constructor promotion**, **named arguments**, and **enums with backed types**.
 - **Mixed content line remapping** ensures error line numbers in embedded CSS/JS/PHP blocks refer to positions in the original HTML/PHP document, not the extracted fragment.
+
+---
+
+## 12 · Known Fixes
+
+### CSS Validation Timeout (stylelint stdin issue)
+
+**Problem**: `CssValidator` was using `--stdin --stdin-filename file.css` flags with stylelint, expecting CSS content to be written to stdin. However, `ProcessExecutor.execute()` does NOT write to the process's stdin stream, causing stylelint to hang indefinitely until timeout.
+
+**Fix**: Changed `CssValidator.buildCommand()` to pass the temp file path directly to stylelint instead of using `--stdin`:
+```java
+// Before (broken):
+return List.of(binaryPath, "--formatter", "json", "--stdin", "--stdin-filename", "file.css");
+
+// After (fixed):
+return List.of(binaryPath, "--formatter", "json", tempFile.toAbsolutePath().toString());
+**Date**: 2026-07-21
+
+### CSS Validation: Syntax-Only Mode (stylelint config)
+
+**Problem**: The default stylelint config included strict linting rules (`no-descending-specificity`, `no-extra-semicolons`) that were not appropriate for embedded CSS validation. The `no-extra-semicolons` rule doesn't exist in newer stylelint versions, and `no-descending-specificity` flags valid CSS selector ordering as errors.
+
+**Fix**: Changed `CssValidator.prepareTempDirectory()` to use a minimal syntax-only stylelint config:
+```java
+// Removed rules:
+// - "no-extra-semicolons" (deprecated/unknown rule)
+// - "no-descending-specificity" (strict ordering rule)
+// - "declaration-block-no-duplicate-properties" (strict linting)
+// - "font-family-no-duplicate-names" (strict linting)
+// - "font-family-no-missing-generic-family-keyword" (strict linting)
+// - "property-no-unknown" (strict linting)
+// - "selector-pseudo-class-no-unknown" (strict linting)
+// - "selector-pseudo-element-no-unknown" (strict linting)
+// - "selector-type-no-unknown" (strict linting)
+// - "shorthand-property-no-redundant-values" (style preference)
+// - "no-duplicate-selectors" (strict linting)
+// - "media-feature-name-no-unknown" (strict linting)
+// - "keyframe-declaration-no-important" (strict linting)
+// - "no-invalid-position-at-import-rule" (strict linting)
+// - "no-duplicate-at-import-rules" (strict linting)
+
+// Retained rules (syntax-only):
+// - "no-empty-source" - empty CSS is invalid
+// - "no-invalid-double-slash-comments" - // is not valid CSS comment
+// - "block-no-empty" - empty blocks are syntax error
+// - "color-no-invalid-hex" - invalid hex colors
+// - "function-calc-no-unspaced-operator" - calc() syntax
+// - "function-linear-gradient-no-nonstandard-direction" - gradient syntax
+// - "string-no-newline" - strings cannot span lines
+// - "no-irregular-whitespace" - control characters
+// - "unit-no-unknown" - invalid CSS units
+```
+
+**Date**: 2026-08-15

@@ -126,4 +126,3 @@ tasks.register('shadowJar', Jar) {
     }
 }
 
-build.dependsOn shadowJar

@@ -133,8 +133,9 @@ final class StylelintOutputParser {
             int line = extractIntValue(block, "line");
             int col = extractIntValue(block, "column");
 
-            // Only consider "error" severity — warnings are not syntax errors
-            if (!"error".equalsIgnoreCase(severity)) {
+            // Accept both "error" and "warning" severity — stylelint defaults to
+            // "warning" when rules are configured without explicit severity.
+            if (severity == null || severity.isBlank()) {
                 continue;
             }
 
@@ -204,7 +205,8 @@ final class StylelintOutputParser {
                 continue;
             }
 
-            if (!"error".equalsIgnoreCase(severity)) {
+            // Accept both "error" and "warning" severity.
+            if (severity == null || severity.isBlank()) {
                 continue;
             }
 
