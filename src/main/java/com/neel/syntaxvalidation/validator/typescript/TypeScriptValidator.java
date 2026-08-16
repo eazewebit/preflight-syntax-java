@@ -8,70 +8,77 @@ import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.process.ProcessExecutor;
 import com.neel.syntaxvalidation.process.ProcessResult;
 import com.neel.syntaxvalidation.validator.AbstractLanguageValidator;
-import com.neel.syntaxvalidation.validator.LanguageValidator;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Validates TypeScript ({@code .ts}), TSX ({@code .tsx}), and JSX ({@code .jsx}) source
- * code using a two-phase, binary-first strategy.
+ * Validates TypeScript syntax using a two-phase, binary-first approach.
  *
- * <h2>Phase 1 &mdash; {@code tsc} deep analysis (when available)</h2>
- * If a {@code tsc} binary is resolvable &mdash; either from an explicitly
- * supplied preferred path, from a {@link BinaryManager}, or from the system
- * {@code PATH} &mdash; the source is validated using the TypeScript compiler
- * with {@code --noEmit} for full type-aware syntax checking. The code is
- * never executed.
+ * <h2>Phase 1 &mdash; tsc deep analysis (when available)</h2>
+ * When the TypeScript compiler ({@code tsc}) is available on the system
+ * &mdash; either from an explicitly supplied preferred path, from a
+ * {@link BinaryManager}, or from the system {@code PATH} &mdash; the full
+ * {@code tsc --noEmit} pipeline runs as the first pass, catching the most
+ * comprehensive set of syntax errors.
  *
- * <h2>Phase 2 &mdash; built-in {@link TypeScriptSyntaxEngine} (fallback)</h2>
- * If {@code tsc} is <em>not</em> available or execution fails, a fast,
- * dependency-free structural pass runs as fallback. It tokenises the source
- * and checks for unbalanced delimiters, unclosed strings, and other obvious
- * syntax errors. This requires zero external dependencies.
- *
- * <p>This class is the public entry point for TypeScript validation and is
- * registered in the {@link com.neel.syntaxvalidation.validator.ValidatorFactory
- * ValidatorFactory}.
+ * <h2>Phase 2 &mdash; Built-in TypeScript syntax engine (fallback)</h2>
+ * If {@code tsc} is <em>not</em> available or execution fails, a pure-Java
+ * {@link TypeScriptSyntaxEngine} runs as fallback, with zero external
+ * dependencies.
  */
-public class TypeScriptValidator extends AbstractLanguageValidator implements LanguageValidator {
+public class TypeScriptValidator extends AbstractLanguageValidator {
 
-    /** The bare binary name searched on {@code PATH}. */
-    static final String BINARY_NAME = "tsc";
+    /** The bare name of the tsc binary searched on the {@code PATH}. */
+    public static final String BINARY_NAME = "tsc";
 
-    private final TypeScriptSyntaxEngine syntaxEngine;
-    private final TscOutputParser outputParser;
+    private static final TscOutputParser PARSER = new TscOutputParser();
+    private static final TypeScriptSyntaxEngine SYNTAX_ENGINE = new TypeScriptSyntaxEngine();
+
+    // ---- configuration properties (non-null defaults) ----
+    private String target = "ESNext";
+    private String module = "ESNext";
+    private String moduleResolution = "bundler";
     private final boolean jsxMode;
 
     /**
      * Creates a validator that resolves {@code tsc} from the system {@code PATH}.
-     *
-     * @param binaryResolver  the resolver used to discover the tsc binary.
-     * @param processExecutor the executor used to run the tsc process.
      */
-    public TypeScriptValidator(BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
-        this(null, binaryResolver, processExecutor, false);
+    public TypeScriptValidator() {
+        this((String) null, false);
     }
 
     /**
-     * Creates a validator in JSX mode for TSX/JSX files.
+     * Creates a validator for the given language (ignoring the language value;
+     * always validates TypeScript). Resolves {@code tsc} from the system
+     * {@code PATH}.
      *
-     * @param binaryResolver  the resolver used to discover the tsc binary.
-     * @param processExecutor the executor used to run the tsc process.
-     * @return a new TypeScriptValidator configured for JSX/TSX files.
-     */
-    public static TypeScriptValidator createJsxValidator(BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
-        return new TypeScriptValidator(null, binaryResolver, processExecutor, true);
-    }
-
-    /**
-     * Creates a validator that resolves {@code tsc} from the system {@code PATH}.
-     *
-     * @param language the specific language variant (TYPESCRIPT)
+     * @param language the language (unused, present for API symmetry).
      */
     public TypeScriptValidator(Language language) {
-        this(null, new BinaryResolver(), new ProcessExecutor(), false);
+        this((String) null, false);
+    }
+
+    /**
+     * @param preferredBinaryPath an explicit path to the {@code tsc} binary, or
+     *                            {@code null} to resolve from the {@code PATH}.
+     */
+    public TypeScriptValidator(String preferredBinaryPath) {
+        this(preferredBinaryPath, false);
+    }
+
+    /**
+     * Full constructor used by the {@link com.neel.syntaxvalidation.validator.ValidatorFactory}
+     * and tests.
+     *
+     * @param preferredBinaryPath an explicit binary path, or {@code null}.
+     * @param binaryResolver      the binary resolver.
+     * @param processExecutor     the process executor.
+     */
+    public TypeScriptValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
+                               ProcessExecutor processExecutor) {
+        this(preferredBinaryPath, false, binaryResolver, processExecutor);
     }
 
     /**
@@ -82,57 +89,70 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
      *                      PATH-only resolution).
      */
     public TypeScriptValidator(BinaryManager binaryManager) {
-        this(null, binaryManager, new ProcessExecutor(), false);
+        this(null, false, binaryManager, new ProcessExecutor());
     }
 
     /**
-     * Creates a validator backed by a {@link BinaryManager} in JSX mode.
-     *
-     * @param binaryManager the binary manager (may be {@code null}).
-     * @return a new TypeScriptValidator configured for JSX/TSX files.
-     */
-    public static TypeScriptValidator createJsxValidator(BinaryManager binaryManager) {
-        return new TypeScriptValidator(null, binaryManager, new ProcessExecutor(), true);
-    }
-
-    /**
-     * Creates a validator with explicit components for testing.
-     *
-     * @param preferredBinaryPath an explicit path to a {@code tsc} executable,
-     *                            or {@code null} to search the {@code PATH}.
-     * @param binaryResolver      the binary resolver to use.
-     * @param processExecutor     the process executor to use.
-     * @param jsxMode             whether to enable JSX mode for TSX/JSX files.
-     */
-    protected TypeScriptValidator(String preferredBinaryPath, BinaryResolver binaryResolver,
-                       ProcessExecutor processExecutor, boolean jsxMode) {
-        super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
-        this.syntaxEngine = new TypeScriptSyntaxEngine();
-        this.outputParser = new TscOutputParser();
-        this.jsxMode = jsxMode;
-        if (jsxMode) {
-            syntaxEngine.enableJsxMode();
-        }
-    }
-
-    /**
-     * Creates a validator backed by a {@link BinaryManager} with explicit
-     * components.
+     * Creates a validator backed by a {@link BinaryManager} with an explicit
+     * preferred path and process executor.
      *
      * @param preferredBinaryPath an explicit binary path, or {@code null}.
      * @param binaryManager       the binary manager (may be {@code null}).
      * @param processExecutor     the process executor to use.
-     * @param jsxMode             whether to enable JSX mode for TSX/JSX files.
      */
-    protected TypeScriptValidator(String preferredBinaryPath, BinaryManager binaryManager,
-                       ProcessExecutor processExecutor, boolean jsxMode) {
-        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
-        this.syntaxEngine = new TypeScriptSyntaxEngine();
-        this.outputParser = new TscOutputParser();
+    public TypeScriptValidator(String preferredBinaryPath, BinaryManager binaryManager,
+                               ProcessExecutor processExecutor) {
+        this(preferredBinaryPath, false, binaryManager, processExecutor);
+    }
+
+    /**
+     * Creates a validator with the given binary resolver and process executor.
+     * Resolves {@code tsc} from the system {@code PATH}.
+     *
+     * @param binaryResolver  the binary resolver.
+     * @param processExecutor the process executor.
+     */
+    public TypeScriptValidator(BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
+        this(null, false, binaryResolver, processExecutor);
+    }
+
+    /**
+     * Private canonical constructor.
+     */
+    private TypeScriptValidator(String preferredBinaryPath, boolean jsxMode) {
+        super(preferredBinaryPath, BINARY_NAME);
         this.jsxMode = jsxMode;
-        if (jsxMode) {
-            syntaxEngine.enableJsxMode();
-        }
+    }
+
+    /**
+     * Private constructor with explicit collaborators.
+     */
+    private TypeScriptValidator(String preferredBinaryPath, boolean jsxMode,
+                                BinaryResolver binaryResolver, ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryResolver, processExecutor);
+        this.jsxMode = jsxMode;
+    }
+
+    /**
+     * Private constructor with binary manager.
+     */
+    private TypeScriptValidator(String preferredBinaryPath, boolean jsxMode,
+                                BinaryManager binaryManager, ProcessExecutor processExecutor) {
+        super(preferredBinaryPath, BINARY_NAME, binaryManager, processExecutor);
+        this.jsxMode = jsxMode;
+    }
+
+    /**
+     * Creates a JSX-aware validator that uses {@code .tsx} as the default
+     * temp-file extension and passes {@code --jsx react-jsx} to tsc.
+     *
+     * @param binaryResolver  the binary resolver.
+     * @param processExecutor the process executor.
+     * @return a new {@code TypeScriptValidator} in JSX mode.
+     */
+    public static TypeScriptValidator createJsxValidator(BinaryResolver binaryResolver,
+                                                         ProcessExecutor processExecutor) {
+        return new TypeScriptValidator(null, true, binaryResolver, processExecutor);
     }
 
     @Override
@@ -148,64 +168,37 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
     @Override
     protected ValidationResult validateWithBuiltInEngine(String content) {
         log.trace("[PHASE-2-FALLBACK] Using built-in TypeScript syntax engine for validation");
-        
-        // Auto-detect JSX content and enable JSX mode if needed.
-        if (jsxMode || containsJsxContent(content)) {
-            syntaxEngine.enableJsxMode();
-        }
-        
-        ValidationResult engineResult = syntaxEngine.validate(content);
+        ValidationResult engineResult = SYNTAX_ENGINE.validate(content);
         if (!engineResult.isValid()) {
             log.trace("[PHASE-2-FALLBACK] Built-in engine found {} errors", engineResult.getErrors().size());
         }
         return engineResult;
     }
 
-    /**
-     * Checks if the content contains JSX-like syntax patterns.
-     * This allows automatic JSX mode activation for .jsx and .tsx files.
-     */
-    private static boolean containsJsxContent(String content) {
-        // Quick check for common JSX patterns
-        return content.contains("</") ||
-               content.contains("/>") ||
-               (content.contains("<") && content.contains(">") &&
-                (content.contains("className") || content.contains("onClick") ||
-                 content.contains("onChange") || content.contains("htmlFor") ||
-                 content.contains("dangerouslySetInnerHTML")));
-    }
-
     @Override
-    protected String getFileExtension() {
+    public String getFileExtension() {
         return jsxMode ? ".tsx" : ".ts";
     }
 
     @Override
     protected List<String> buildCommand(String binaryPath, Path tempFile) {
         List<String> command = new ArrayList<>();
-
-        // Check if the binary is npx (for npx tsc)
-        if (binaryPath.contains("npx") || binaryPath.contains("npx.cmd") || binaryPath.contains("npx.exe")) {
-            command.add(binaryPath);
-            command.add("tsc");
-        } else {
-            command.add(binaryPath);
-        }
-
+        command.add(binaryPath);
         command.add("--noEmit");
         command.add("--pretty");
         command.add("false");
-        command.add("--strict");
+        command.add("--noResolve");
         command.add("--target");
-        command.add("ES2020");
+        command.add(target);
         command.add("--module");
-        command.add("ESNext");
+        command.add(module);
         command.add("--moduleResolution");
-        command.add("bundler");
+        command.add(moduleResolution);
 
-        if (jsxMode) {
+        if (jsxMode || tempFile.toString().endsWith(".tsx") || tempFile.toString().endsWith(".jsx")) {
             command.add("--jsx");
             command.add("react-jsx");
+            command.add("--allowJs");
         }
 
         command.add("--skipLibCheck");
@@ -216,13 +209,17 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
 
     @Override
     protected ValidationResult parseOutput(ProcessResult result, Path tempFile) {
+        if (result.timedOut()) {
+            return ValidationResult.invalid(
+                    "TypeScript syntax validation timed out.",
+                    new ValidationError(-1, -1, "The tsc process did not finish in time.", result.stderr()));
+        }
         if (result.succeeded()) {
             return ValidationResult.valid("TypeScript syntax is valid (verified by tsc).");
         }
 
-        String output = result.stderr().isEmpty() ? result.stdout() : result.stderr();
-
-        List<ValidationError> errors = outputParser.parse(output);
+        String output = result.stderr().isBlank() ? result.stdout() : result.stderr();
+        List<ValidationError> errors = PARSER.parse(output);
 
         if (errors.isEmpty()) {
             // Non-zero exit code but couldn't parse specific errors
@@ -234,14 +231,54 @@ public class TypeScriptValidator extends AbstractLanguageValidator implements La
             return ValidationResult.valid("TypeScript syntax is valid.");
         }
 
-        String message = "TypeScript syntax errors found: " + errors.size() + " error(s).";
-        return ValidationResult.invalid(message, errors);
+        String summary = errors.isEmpty()
+                ? "TypeScript syntax validation failed."
+                : "TypeScript syntax validation failed with " + errors.size() + " error(s).";
+        return ValidationResult.invalid(summary, errors);
     }
 
     @Override
-    protected String binaryNotFoundMessage() {
+    public String binaryNotFoundMessage() {
         return "tsc binary not found. Install TypeScript globally (npm install -g typescript) "
                 + "or provide a path via the 'tsc.path' system property. "
                 + "Falling back to the built-in TypeScript syntax engine.";
+    }
+
+    // ---- configuration setters ----
+
+    /**
+     * Sets the ECMAScript target version used when invoking tsc.
+     * @param target e.g. "ES2015", "ES2020", "ESNext".
+     */
+    public void setTarget(String target) {
+        this.target = target;
+    }
+
+    /**
+     * Sets the module system used when invoking tsc.
+     * @param module e.g. "CommonJS", "ESNext".
+     */
+    public void setModule(String module) {
+        this.module = module;
+    }
+
+    /**
+     * Sets the module resolution strategy used when invoking tsc.
+     * @param moduleResolution e.g. "node", "node16", "bundler".
+     */
+    public void setModuleResolution(String moduleResolution) {
+        this.moduleResolution = moduleResolution;
+    }
+
+    public String getTarget() {
+        return target;
+    }
+
+    public String getModule() {
+        return module;
+    }
+
+    public String getModuleResolution() {
+        return moduleResolution;
     }
 }
