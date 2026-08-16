@@ -10,8 +10,8 @@ import com.neel.syntaxvalidation.validator.javascript.JavaScriptSyntaxEngine;
 import com.neel.syntaxvalidation.validator.php.PhpSyntaxEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -179,90 +179,121 @@ public final class MixedContentSyntaxEngine {
             throw new NullPointerException("htmlSource must not be null");
         }
 
-        // Stage 1: Extract embedded content blocks
+        log.info("════════════════════════════════════════════════════════════════");
+        log.info("║ [MIXED-CONTENT] Starting mixed content validation");
+        log.info("║ Content length: {} chars", htmlSource.length());
+        log.info("║ Has PHP validator: {}", hasPhpValidator());
+        log.info("║ Is PHP mixed content: {}", isPhpMixedContent(htmlSource));
+        log.info("║ Is pure PHP content: {}", isPurePhpContent(htmlSource));
+        log.info("════════════════════════════════════════════════════════════════");
+
+        // Extract all embedded blocks first (needed for line remapping)
         List<ExtractedBlock> blocks = extractor.extract(htmlSource);
-        log.debug("[MIXED-CONTENT] Extracted {} embedded content block(s)", blocks.size());
 
-        // Detect pure PHP content — skip HTML structure validation
-        boolean isPurePhp = isPurePhpContent(htmlSource);
+        // ──────────────────────────────────────────────────────────────
+        //  STAGE 1: PHP-First Validation for PHP Mixed Content
+        // ──────────────────────────────────────────────────────────────
+        //  When content is PHP mixed (PHP tags + HTML structure),
+        //  validate the ENTIRE file with php -l first. If PHP syntax
+        //  is valid, skip VNU/stylelint/node entirely because:
+        //    1. php -l correctly parses the full file
+        //    2. PHP blocks stripped from HTML/CSS/JS create false errors
+        //    3. PHP generates HTML at runtime, not at parse time
+        // ──────────────────────────────────────────────────────────────
 
-        ValidationResult htmlResult;
+        if (hasPhpValidator() && isPhpMixedContent(htmlSource)) {
+            log.info("║ [PHP-FIRST] Detected PHP mixed content - validating with PHP binary first");
+
+            ValidationResult phpFullResult = validatePhp(htmlSource);
+
+            if (phpFullResult.isValid()) {
+                log.info("║ [PHP-FIRST] ✓ PHP binary validation PASSED - SKIPPING VNU/stylelint/node");
+                log.info("║ [PHP-FIRST] PHP syntax is valid; HTML/CSS/JS validation skipped");
+                log.info("════════════════════════════════════════════════════════════════");
+
+                return ValidationResult.valid(
+                        "PHP mixed content is syntactically valid. "
+                        + "PHP binary (php -l) confirmed valid PHP syntax. "
+                        + "HTML/CSS/JS validation skipped (PHP generates valid HTML at runtime).");
+            } else {
+                log.warn("║ [PHP-FIRST] ✗ PHP binary validation FAILED - collecting errors");
+                log.warn("║ [PHP-FIRST] PHP errors: {}", phpFullResult.getErrors().size());
+                log.info("════════════════════════════════════════════════════════════════");
+
+                // PHP syntax errors in the file - report them and skip sub-validators
+                // since the PHP code itself is invalid
+                return phpFullResult;
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────────
+        //  STAGE 2: Standard Validation (Pure HTML or No PHP Validator)
+        // ──────────────────────────────────────────────────────────────
+
+        if (isPurePhpContent(htmlSource)) {
+            // Pure PHP: validate only PHP blocks
+            log.info("[MIXED-CONTENT] Pure PHP file detected - validating PHP blocks only");
+
+            List<ValidationResult> phpResults = new ArrayList<>();
+            for (ExtractedBlock block : blocks) {
+                if (block.language() == Language.PHP && !block.isEmpty()) {
+                    ValidationResult phpResult = validatePhp(block.content());
+                    if (!phpResult.isValid()) {
+                        phpResults.add(remapLineNumbers(phpResult, block));
+                    }
+                }
+            }
+            return mergeResults(ValidationResult.valid("Validation passed"), Collections.emptyList(),
+                    Collections.emptyList(), phpResults);
+        }
+
+        // Standard HTML/PHP mixed validation (no PHP binary available)
+        log.info("[MIXED-CONTENT] Standard validation - no PHP binary, using per-block validation");
+
+        // Stage 3: Validate full HTML structure (after sanitizing PHP tags)
+        String sanitizedHtml = sanitizePhpTags(htmlSource);
+        ValidationResult htmlResult = validateHtml(sanitizedHtml);
+
+        // Stage 4: Validate CSS blocks
         List<ValidationResult> cssResults = new ArrayList<>();
-        List<ValidationResult> jsResults = new ArrayList<>();
-        List<ValidationResult> phpResults = new ArrayList<>();
-
-        if (isPurePhp) {
-            // Pure PHP file — skip HTML structure validation entirely.
-            // vnu.jar would incorrectly report <?php as XML processing
-            // instruction errors.
-            log.info("[MIXED-CONTENT] Detected pure PHP content — skipping HTML structure validation");
-            htmlResult = ValidationResult.valid("Pure PHP content — HTML validation skipped.");
-
-            // Validate PHP blocks (extracted by HtmlContentExtractor)
-            for (ExtractedBlock block : blocks) {
-                if (block.language() == Language.PHP && !block.isEmpty()) {
-                    ValidationResult phpResult = validatePhp(block.content());
-                    if (!phpResult.isValid()) {
-                        phpResults.add(remapLineNumbers(phpResult, block));
-                    }
-                }
-            }
-
-            // Edge case: pure PHP without closing ?> — extractor returns no
-            // PHP blocks. Validate the entire source as PHP.
-            boolean hasPhpBlocks = blocks.stream()
-                    .anyMatch(b -> b.language() == Language.PHP && !b.isEmpty());
-            if (phpResults.isEmpty() && !hasPhpBlocks) {
-                log.info("[MIXED-CONTENT] No PHP blocks extracted — validating entire source as PHP");
-                ValidationResult wholeFileResult = validatePhp(htmlSource);
-                if (!wholeFileResult.isValid()) {
-                    phpResults.add(wholeFileResult);
-                }
-            }
-        } else {
-            // Stage 2: Validate the full HTML structure
-            htmlResult = validateHtml(htmlSource);
-
-            // Stage 3: Validate embedded CSS blocks
-            for (ExtractedBlock block : blocks) {
-                if (block.language() == Language.CSS && !block.isEmpty()) {
-                    ValidationResult cssResult = validateCss(block.content());
-                    if (!cssResult.isValid()) {
-                        cssResults.add(remapLineNumbers(cssResult, block));
-                    }
-                }
-            }
-
-            // Stage 4: Validate embedded JavaScript blocks
-            for (ExtractedBlock block : blocks) {
-                if (block.language() == Language.JAVASCRIPT && !block.isEmpty()) {
-                    ValidationResult jsResult = validateJavaScript(block.content());
-                    if (!jsResult.isValid()) {
-                        jsResults.add(remapLineNumbers(jsResult, block));
-                    }
-                }
-            }
-
-            // Stage 5: Validate embedded PHP blocks
-            for (ExtractedBlock block : blocks) {
-                if (block.language() == Language.PHP && !block.isEmpty()) {
-                    ValidationResult phpResult = validatePhp(block.content());
-                    if (!phpResult.isValid()) {
-                        phpResults.add(remapLineNumbers(phpResult, block));
-                    }
+        for (ExtractedBlock block : blocks) {
+            if (block.language() == Language.CSS && !block.isEmpty()) {
+                String sanitizedCss = sanitizePhpTagsForCss(block.content());
+                ValidationResult cssResult = validateCss(sanitizedCss);
+                if (!cssResult.isValid()) {
+                    cssResults.add(remapLineNumbers(cssResult, block));
                 }
             }
         }
 
-        // Stage 6: Merge all errors
+        // Stage 5: Validate JavaScript blocks
+        List<ValidationResult> jsResults = new ArrayList<>();
+        for (ExtractedBlock block : blocks) {
+            if (block.language() == Language.JAVASCRIPT && !block.isEmpty()) {
+                String sanitizedJs = sanitizePhpTagsForJs(block.content());
+                ValidationResult jsResult = validateJavaScript(sanitizedJs);
+                if (!jsResult.isValid()) {
+                    jsResults.add(remapLineNumbers(jsResult, block));
+                }
+            }
+        }
+
+        // Stage 6: Validate PHP blocks
+        List<ValidationResult> phpResults = new ArrayList<>();
+        for (ExtractedBlock block : blocks) {
+            if (block.language() == Language.PHP && !block.isEmpty()) {
+                ValidationResult phpResult = validatePhp(block.content());
+                if (!phpResult.isValid()) {
+                    phpResults.add(remapLineNumbers(phpResult, block));
+                }
+            }
+        }
+
+        // Stage 7: Merge all errors
         return mergeResults(htmlResult, cssResults, jsResults, phpResults);
     }
-
-    // ====================================================================
-    //  Per-language validation delegates
-    // ====================================================================
-
     /**
+     * Validates the full source as HTML using the HTML validator if available,
      * Validates the full source as HTML using the HTML validator if available,
      * otherwise falls back to the built-in {@link HtmlSyntaxEngine}.
      */
@@ -270,9 +301,7 @@ public final class MixedContentSyntaxEngine {
         if (htmlValidator != null) {
             log.info("[MIXED-CONTENT] HTML validation: Using BINARY-BACKED VALIDATOR ({})",
                     htmlValidator.getClass().getSimpleName());
-            ValidationResult result = htmlValidator.validate(source);
-            log.debug("[MIXED-CONTENT] HTML validator result: valid={}", result.isValid());
-            return result;
+            return htmlValidator.validate(source);
         }
         log.debug("[MIXED-CONTENT] HTML validation: Using built-in engine ({})",
                 htmlEngine.getClass().getSimpleName());
@@ -293,10 +322,10 @@ public final class MixedContentSyntaxEngine {
                 cssEngine.getClass().getSimpleName());
         return cssEngine.validate(source);
     }
-
     /**
      * Validates JavaScript content using the binary-backed validator when
-     * available, otherwise falls back to the built-in {@link JavaScriptSyntaxEngine}.
+     * available, otherwise falls back to the built-in
+     * {@link JavaScriptSyntaxEngine}.
      */
     private ValidationResult validateJavaScript(String source) {
         if (jsValidator != null) {
@@ -479,11 +508,90 @@ public final class MixedContentSyntaxEngine {
         sb.append(".");
         return sb.toString();
     }
-
     // ====================================================================
-    //  Pure PHP content detection
+    //  PHP tag sanitization
     // ====================================================================
 
+    /**
+     * Removes all PHP tags from the given source so that non-PHP validators
+     * (vnu.jar for HTML, stylelint for CSS, node --check for JavaScript)
+     * do not encounter {@code <?php} or {@code ?>} sequences that they
+     * cannot parse.
+     *
+     * <p>This method replaces:
+     * <ul>
+     *   <li>Complete PHP blocks ({@code <?php ... ?>}, {@code <?= ... ?>},
+     *       {@code <? ... ?>}) with an empty string.</li>
+     *   <li>PHP open-to-EOF blocks ({@code <?php ...} with no closing
+     *       {@code ?>}) with an empty string.</li>
+     * </ul>
+     *
+     * <p><b>Important:</b> This method must NOT be called on PHP block
+     * content that has already been extracted by
+     * {@link HtmlContentExtractor#extract(String)}, because the extractor
+     * already strips the {@code <?php} and {@code ?>} tags from PHP blocks.
+     *
+     * @param source the source code potentially containing PHP tags.
+     * @return the source with all PHP tag sequences removed.
+     */
+    /**
+     * Sanitizes PHP tags from source code by replacing them with context-appropriate
+     * placeholders. This prevents false validation errors when PHP code is stripped
+     * from HTML/CSS/JS content.
+     *
+     * <p>Context-aware placeholders used:</p>
+     * <ul>
+     *   <li>HTML attributes: "php" (valid non-empty attribute value)</li>
+     *   <li>CSS values: "inherit" (valid CSS keyword)</li>
+     *   <li>JavaScript expressions: "null" (valid JS literal)</li>
+     * </ul>
+     *
+     * @param source the source code potentially containing PHP tags.
+     * @return the source with PHP tags replaced by context-appropriate placeholders.
+     */
+    private String sanitizePhpTags(String source) {
+        if (source == null || source.isEmpty()) {
+            return source;
+        }
+        // Replace complete PHP blocks with "php" placeholder
+        // This handles: <?php ... ?>, <?= ... ?>
+        String result = COMPLETE_PHP_BLOCK_PATTERN.matcher(source).replaceAll("php");
+        // Replace PHP open-to-EOF with "php" (unclosed PHP blocks)
+        result = PHP_OPEN_TO_EOF_PATTERN.matcher(result).replaceAll("php");
+        return result;
+    }
+
+    /**
+     * Sanitizes PHP tags from CSS content by replacing with valid CSS placeholders.
+     * Uses "inherit" which is a valid CSS keyword for most properties.
+     *
+     * @param cssContent CSS content potentially containing PHP tags.
+     * @return CSS content with PHP tags replaced by valid CSS values.
+     */
+    private String sanitizePhpTagsForCss(String cssContent) {
+        if (cssContent == null || cssContent.isEmpty()) {
+            return cssContent;
+        }
+        String result = COMPLETE_PHP_BLOCK_PATTERN.matcher(cssContent).replaceAll("inherit");
+        result = PHP_OPEN_TO_EOF_PATTERN.matcher(result).replaceAll("inherit");
+        return result;
+    }
+
+    /**
+     * Sanitizes PHP tags from JavaScript content by replacing with valid JS placeholders.
+     * Uses "null" which is a valid JavaScript literal expression.
+     *
+     * @param jsContent JavaScript content potentially containing PHP tags.
+     * @return JavaScript content with PHP tags replaced by valid JS expressions.
+     */
+    private String sanitizePhpTagsForJs(String jsContent) {
+        if (jsContent == null || jsContent.isEmpty()) {
+            return jsContent;
+        }
+        String result = COMPLETE_PHP_BLOCK_PATTERN.matcher(jsContent).replaceAll("null");
+        result = PHP_OPEN_TO_EOF_PATTERN.matcher(result).replaceAll("null");
+        return result;
+    }
     /**
      * Detects whether the given source is a standalone pure PHP file
      * (not mixed with HTML).
@@ -532,6 +640,43 @@ public final class MixedContentSyntaxEngine {
         return remainder.isBlank();
     }
 
+    /**
+     * Determines if the source is PHP mixed content (PHP tags embedded in HTML structure).
+     *
+     * <p>PHP mixed content is detected when BOTH conditions are met:</p>
+     * <ul>
+     *   <li>Contains at least one PHP opening tag ({@code <?php}, {@code <?=}, or {@code <?})</li>
+     *   <li>Contains HTML structure markers ({@code <html}, {@code <head}, {@code <body},
+     *       {@code <!DOCTYPE}, or {@code <div})</li>
+     * </ul>
+     *
+     * <p>This distinguishes PHP mixed content from:</p>
+     * <ul>
+     *   <li>Pure PHP files (PHP tags but no HTML structure)</li>
+     *   <li>Pure HTML files (HTML structure but no PHP tags)</li>
+     * </ul>
+     *
+     * @param source the source code to check.
+     * @return true if the source contains both PHP tags and HTML structure.
+     */
+    private boolean isPhpMixedContent(String source) {
+        if (source == null || source.isEmpty()) {
+            return false;
+        }
+
+        boolean hasPhpTags = COMPLETE_PHP_BLOCK_PATTERN.matcher(source).find()
+                || source.contains("<?php") || source.contains("<?=");
+        boolean hasHtmlStructure = source.regionMatches(true, 0, "<!DOCTYPE", 0, 9)
+                || source.contains("<html") || source.contains("<HTML")
+                || source.contains("<head") || source.contains("<HEAD")
+                || source.contains("<body") || source.contains("<BODY")
+                || source.contains("<div") || source.contains("<DIV");
+
+        return hasPhpTags && hasHtmlStructure;
+    }
+
+    // ====================================================================
+    //  Pure PHP detection patterns
     // ====================================================================
     //  Pure PHP detection patterns
     // ====================================================================
