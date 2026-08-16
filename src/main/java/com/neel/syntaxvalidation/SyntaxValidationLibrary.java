@@ -13,9 +13,7 @@ import com.neel.syntaxvalidation.validator.mixed.MixedContentValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.List;
@@ -106,32 +104,8 @@ public class SyntaxValidationLibrary {
         this.modificationApplier = new ModificationApplier();
     }
 
-    public static void main(String[] args) throws IOException {
-        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
-
-        String filepath = "C:\\Users\\njpollob\\Documents\\test-ai-tool\\css\\valid\\simple.css";
-
-        library.clearCache();
-        // build modification request
-        ModificationRequest modificationRequest
-                = ModificationRequest.builder()
-                        .filePath(filepath)
-                                .fromLine(34)
-                                        .toLine(35)
-                                                .replacement("")
-                                                        .build();
-
-        // smart route and validation.
-        ValidationResult result = library.validateAllLanguage(modificationRequest);
-
-        //print result
-        System.out.println(result);
-
-    }
-
-
     /**
-     * Returns the {@link BinaryManager} used by this library to resolve
+     * Returns the {@link BinaryManager} used by this library for resolving
      * external validation binaries.
      *
      * @return the binary manager (never {@code null}).
@@ -139,6 +113,11 @@ public class SyntaxValidationLibrary {
     public BinaryManager getBinaryManager() {
         return binaryManager;
     }
+
+
+    // ====================================================================
+    //  Validation methods
+    // ====================================================================
 
     /**
      * Validates a proposed modification without writing anything to disk.
@@ -196,18 +175,6 @@ public class SyntaxValidationLibrary {
      * Validates HTML source that may contain embedded CSS ({@code <style>}) and
      * JavaScript ({@code <script>}) content.
      *
-     * <p>This method uses a {@link MixedContentValidator} that:
-     * <ol>
-     *   <li>Validates the HTML structure (using vnu.jar when available).</li>
-     *   <li>Extracts and validates embedded {@code <style>} blocks with the CSS
-     *       syntax engine.</li>
-     *   <li>Extracts and validates embedded {@code <script>} blocks with the
-     *       JavaScript syntax engine.</li>
-     * </ol>
-     *
-     * <p>Error line numbers are remapped to the original HTML document
-     * positions.
-     *
      * @param htmlSource the full HTML source code to validate.
      * @return a {@link ValidationResult} containing all errors found across
      *         HTML, CSS, and JavaScript validation.
@@ -227,11 +194,6 @@ public class SyntaxValidationLibrary {
     /**
      * Validates a proposed modification to an HTML file, including any
      * embedded CSS and JavaScript content.
-     *
-     * <p>This is the mixed-content counterpart of
-     * {@link #validate(ModificationRequest)}. The modification is applied
-     * in-memory, and then the result is validated with the
-     * {@link MixedContentValidator}.
      *
      * @param request the modification to validate; must target an HTML file.
      * @return a structured result describing whether the modified content is
@@ -271,21 +233,6 @@ public class SyntaxValidationLibrary {
      * Unified validation entry-point that automatically selects mixed-content
      * validation (HTML/PHP with embedded CSS/JS) or language-specific validation
      * depending on the detected file language.
-     *
-     * <p>Detection is based solely on the file extension of
-     * {@link ModificationRequest#getFilePath()}. The routing logic is:
-     * <ul>
-     *   <li><b>HTML / PHP</b> – delegates to
-     *       {@link #validateMixedContent(ModificationRequest)}, which validates
-     *       the HTML/PHP structure <em>and</em> any embedded {@code <style>},
-     *       {@code <script>} and {@code <?php} blocks.</li>
-     *   <li><b>All other supported languages</b> (JavaScript, TypeScript, CSS,
-     *       Python, Java) – delegates to {@link #validate(ModificationRequest)},
-     *       which uses the corresponding {@link LanguageValidator}.</li>
-     * </ul>
-     *
-     * <p>If the file extension is unsupported, a diagnostic
-     * {@link ValidationResult} is returned.
      *
      * @param request the modification to validate; must not be {@code null}.
      * @return a structured result describing whether the modified content is
