@@ -43,6 +43,11 @@ public final class PythonOutputParser {
     // Matches the caret (^) indicator line to extract column
     private static final Pattern CARET_PATTERN = Pattern.compile("^(\\s*)\\^");
 
+    // Known non-Python messages that indicate the binary is a stub/alias
+    // (e.g., Windows Store python3.exe stub) — these are NOT syntax errors.
+    private static final Pattern STUB_MESSAGE_PATTERN = Pattern.compile(
+            "(?i)(was not found|install from|Microsoft Store|App execution aliases|not recognized)");
+
     /**
      * Parses the output from a Python syntax check process.
      *
@@ -54,6 +59,17 @@ public final class PythonOutputParser {
     public static ValidationResult parse(String stderr, String stdout, int exitCode) {
         if (exitCode == 0 && (stderr == null || stderr.isBlank())) {
             return ValidationResult.valid("Python syntax check passed.");
+        }
+
+        // Detect Windows Store stub or other non-Python binary messages.
+        // These indicate the binary itself is broken, NOT that the code has errors.
+        // Return INVALID with a synthetic error so the caller can distinguish
+        // between "code has errors" and "binary is broken".
+        if (isStubOrBrokenBinary(stderr)) {
+            String stubMsg = (stderr != null) ? stderr.trim() : "Python binary is not functional.";
+            return ValidationResult.invalid(
+                    "Python binary is a stub or broken alias: " + stubMsg,
+                    List.of(new ValidationError(1, -1, "BINARY_STUB: " + stubMsg, null)));
         }
 
         List<ValidationError> errors = new ArrayList<>();
@@ -75,6 +91,18 @@ public final class PythonOutputParser {
 
         return ValidationResult.invalid(
                 "Python syntax check found " + errors.size() + " error(s).", errors);
+    }
+
+    /**
+     * Detects if the stderr output indicates a stub or broken Python binary
+     * (e.g., Windows Store python3.exe stub that just opens the Store).
+     * This is NOT a syntax error in the user's code.
+     */
+    static boolean isStubOrBrokenBinary(String stderr) {
+        if (stderr == null || stderr.isBlank()) {
+            return false;
+        }
+        return STUB_MESSAGE_PATTERN.matcher(stderr).find();
     }
 
     /**
@@ -163,12 +191,12 @@ public final class PythonOutputParser {
         }
 
         // If we have a non-zero exit code but no parsed errors, try a more
-        // aggressive extraction
+        // aggressive extraction — but only match Python-specific error types
         if (errors.isEmpty() && !errorOutput.isBlank()) {
-            Pattern genericError = Pattern.compile("(\\w+Error):\\s*(.*)");
-            Matcher m = genericError.matcher(errorOutput);
+            Pattern pythonError = Pattern.compile("(Syntax|Indentation|Tab|Encoding|Token|Memory|Name|Type|Value)Error:\\s*(.*)");
+            Matcher m = pythonError.matcher(errorOutput);
             if (m.find()) {
-                errors.add(new ValidationError(1, 1, m.group(1) + ": " + m.group(2).trim(), null));
+                errors.add(new ValidationError(1, 1, m.group(1) + "Error: " + m.group(2).trim(), null));
             }
         }
 

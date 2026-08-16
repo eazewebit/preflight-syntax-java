@@ -95,53 +95,32 @@ public class PythonValidator extends AbstractLanguageValidator implements Langua
     @Override
     protected List<String> buildCommand(String binaryPath, Path tempFile) {
         String escapedPath = escapePath(tempFile.toString());
+        // Use bare-minimum syntax check: ast.parse() only.
+        // Python's default SyntaxError traceback is parseable by PythonOutputParser.
+        // No try/except needed — Python exits 1 on SyntaxError with a clean traceback.
         return List.of(
                 binaryPath,
                 "-c",
-                "import ast, sys; " +
-                        "try: " +
-                        "    ast.parse(open(r'" + escapedPath + "').read(), '<string>'); " +
-                        "except SyntaxError as e: " +
-                        "    print(f'  File \"<string>\", line {e.lineno}', file=sys.stderr); " +
-                        "    if e.text: " +
-                        "        print(e.text.rstrip(), file=sys.stderr); " +
-                        "        print(' ' * ((e.offset or 1) - 1) + '^', file=sys.stderr); " +
-                        "    print(f'SyntaxError: {e.msg}', file=sys.stderr); " +
-                        "    sys.exit(1); " +
-                        "except IndentationError as e: " +
-                        "    print(f'  File \"<string>\", line {e.lineno}', file=sys.stderr); " +
-                        "    if e.text: " +
-                        "        print(e.text.rstrip(), file=sys.stderr); " +
-                        "        print(' ' * ((e.offset or 1) - 1) + '^', file=sys.stderr); " +
-                        "    print(f'IndentationError: {e.msg}', file=sys.stderr); " +
-                        "    sys.exit(1); " +
-                        "except TabError as e: " +
-                        "    print(f'  File \"<string>\", line {e.lineno}', file=sys.stderr); " +
-                        "    if e.text: " +
-                        "        print(e.text.rstrip(), file=sys.stderr); " +
-                        "        print(' ' * ((e.offset or 1) - 1) + '^', file=sys.stderr); " +
-                        "    print(f'TabError: {e.msg}', file=sys.stderr); " +
-                        "    sys.exit(1); " +
-                        "except Exception as e: " +
-                        "    print(f'{type(e).__name__}: {e}', file=sys.stderr); " +
-                        "    sys.exit(1)"
+                "import ast; ast.parse(open(r'" + escapedPath + "').read())"
         );
     }
 
     @Override
     protected ValidationResult parseOutput(ProcessResult result, Path tempFile) {
-        if (result.timedOut()) {
-            return ValidationResult.invalid(
-                    "Python syntax validation timed out.",
-                    new ValidationError(-1, -1, "The python process did not finish in time.", result.stderr()));
-        }
-
         String output = result.stderr();
         if (output == null || output.isBlank()) {
             output = result.stdout();
         }
 
         ValidationResult parsed = PythonOutputParser.parse(output, result.stdout(), result.exitCode());
+
+        // If the parser detected a stub binary (e.g., Windows Store python3.exe),
+        // throw an exception so the base class falls back to the built-in engine.
+        if (!parsed.isValid() && isStubBinary(parsed)) {
+            log.warn("[PHASE-1-BINARY] Detected stub/broken Python binary, falling back to built-in engine");
+            throw new RuntimeException("Python binary is a stub or broken alias");
+        }
+
         if (!parsed.isValid()) {
             return parsed;
         }
@@ -155,6 +134,16 @@ public class PythonValidator extends AbstractLanguageValidator implements Langua
                 : output.trim();
         return ValidationResult.invalid(message,
                 List.of(new ValidationError(1, -1, message, null)));
+    }
+
+    /**
+     * Checks if the validation result indicates a stub binary rather than
+     * actual Python syntax errors.
+     */
+    private static boolean isStubBinary(ValidationResult result) {
+        if (result.getErrors() == null) return false;
+        return result.getErrors().stream()
+                .anyMatch(e -> e.getMessage() != null && e.getMessage().startsWith("BINARY_STUB:"));
     }
 
     @Override
