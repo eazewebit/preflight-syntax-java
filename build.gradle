@@ -3,7 +3,6 @@ plugins {
     id 'org.owasp.dependencycheck' version '10.0.4'
     id 'jacoco'
 }
-
 group = 'com.neel'
 version = '1.0.0'
 

@@ -31,7 +31,20 @@ When validating PHP mixed content (PHP tags embedded in HTML structure):
 
 | Validator | Binary | Purpose |
 |-----------|--------|---------|
-| HTML | vnu.jar | HTML5 validation |
+| HTML | vnu.jar | HTML5 validation (syntax-only mode with `--errors-only` and `--filterpattern` to skip ARIA/accessibility checks) |
 | CSS | stylelint | CSS linting |
 | JS | node | JavaScript syntax |
 | PHP | php.exe | PHP syntax (`php -l`) |
+
+### HTML Validator (vnu) Configuration
+
+The HTML validator operates in **syntax-only mode** by passing these flags to vnu:
+- `--errors-only`: Only report errors, not warnings
+- `--filterpattern`: Regex pattern to filter out non-syntax messages
+
+The filter pattern `VNU_SYNTAX_ONLY_FILTER` excludes:
+- ARIA attribute restrictions (e.g., `aria-label` on `<div>` without proper role)
+- Role attribute restrictions
+- Accessibility-related attribute requirements
+
+This focuses validation on **structural/syntax correctness** (AST-level) rather than semantic/accessibility compliance.
