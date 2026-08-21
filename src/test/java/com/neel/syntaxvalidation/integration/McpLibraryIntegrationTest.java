@@ -383,7 +383,7 @@ class McpLibraryIntegrationTest {
         void validation_withNullRequest_throwsException() {
             SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
-            assertThatThrownBy(() -> library.validate(null))
+            assertThatThrownBy(() -> library.validate((ModificationRequest) null))
                     .isInstanceOf(IllegalArgumentException.class);
         }
     }

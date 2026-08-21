@@ -3,7 +3,9 @@ package com.neel.syntaxvalidation;
 import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.cache.FileCache;
 import com.neel.syntaxvalidation.cache.FileCacheEntry;
+import com.neel.syntaxvalidation.model.BatchModificationRequest;
 import com.neel.syntaxvalidation.model.Language;
+import com.neel.syntaxvalidation.model.LineReplacement;
 import com.neel.syntaxvalidation.model.ModificationRequest;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.modification.ModificationApplier;
@@ -16,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -112,6 +115,46 @@ public class SyntaxValidationLibrary {
      */
     public BinaryManager getBinaryManager() {
         return binaryManager;
+    }
+
+    static void main(String[] args) {
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        List<LineReplacement> lineReplacements = new ArrayList<>();
+
+        // add second line
+        lineReplacements.add(
+                LineReplacement.builder()
+                        .fromLine(86)
+                        .toLine(86)
+                        .replacement("replacement text")
+                        .build()
+        );
+
+        lineReplacements.add(
+                LineReplacement.builder()
+                        .fromLine(119)
+                        .toLine(119)
+                        .replacement("replacement txt")
+                        .build()
+        );
+
+
+
+        BatchModificationRequest batchModificationRequest =
+                BatchModificationRequest.builder()
+                        .filePath("/file/path/goes/here")
+                        .addAllReplacements(lineReplacements)
+                        .build();
+
+
+        ValidationResult result = library.validateAllLanguage(batchModificationRequest);
+
+        if (result.isValid()) {
+            System.out.println("Safe to apply!");
+        } else {
+            System.out.println(result);
+        }
     }
 
 
@@ -264,7 +307,143 @@ public class SyntaxValidationLibrary {
                 return validate(request);
         }
     }
+    // ====================================================================
+    //  Batch validation methods
+    // ====================================================================
 
+    /**
+     * Validates a proposed batch modification without writing anything to disk.
+     *
+     * <p>Applies all replacements in the batch to an in-memory copy of the file
+     * and validates the result using the appropriate language-specific validator.
+     * Replacements are applied in reverse line order to preserve line numbers.
+     *
+     * @param request the batch modification to validate; must not be {@code null}.
+     * @return a structured result describing whether the modified content is syntactically valid.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     */
+    public ValidationResult validate(BatchModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.filePath());
+        log.debug("Validating batch modification for file: {} ({} replacements)",
+                path, request.replacements().size());
+
+        Optional<Language> language = Language.fromPath(path);
+        if (language.isEmpty()) {
+            log.warn("Unsupported file extension: {}", path);
+            return ValidationResult.invalid(
+                    "Unable to detect a supported language from the file extension: " + path);
+        }
+
+        Optional<LanguageValidator> validator = validatorFactory.getValidator(language.get());
+        if (validator.isEmpty()) {
+            log.warn("No validator registered for language: {}", language.get());
+            return ValidationResult.invalid(
+                    "No validator is registered for language: " + language.get());
+        }
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            return ValidationResult.invalid("File does not exist: " + path);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
+        }
+
+        List<String> modifiedLines = modificationApplier.applyAll(
+                entry.getLines(),
+                request.replacements());
+
+        String modifiedContent = String.join("\n", modifiedLines);
+        String fileName = path.getFileName().toString();
+        ValidationResult result = validator.get().validate(modifiedContent, fileName);
+        log.debug("Batch validation result for {}: valid={}", path, result.isValid());
+        return result;
+    }
+
+    /**
+     * Validates a proposed batch modification to an HTML file, including any
+     * embedded CSS and JavaScript content.
+     *
+     * <p>Applies all replacements in the batch to an in-memory copy of the file
+     * and validates the result using the mixed-content validator.
+     *
+     * @param request the batch modification to validate; must target an HTML file.
+     * @return a structured result describing whether the modified content is
+     *         syntactically valid (including embedded CSS/JS checks).
+     * @throws NullPointerException if {@code request} is {@code null}.
+     */
+    public ValidationResult validateMixedContent(BatchModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.filePath());
+        log.debug("Validating batch mixed-content modification for file: {} ({} replacements)",
+                path, request.replacements().size());
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            return ValidationResult.invalid("File does not exist: " + path);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
+        }
+
+        List<String> modifiedLines = modificationApplier.applyAll(
+                entry.getLines(),
+                request.replacements());
+
+        String modifiedContent = String.join("\n", modifiedLines);
+        return validateMixedContent(modifiedContent);
+    }
+
+    /**
+     * Unified batch validation entry-point that automatically selects mixed-content
+     * validation (HTML/PHP with embedded CSS/JS) or language-specific validation
+     * depending on the detected file language.
+     *
+     * @param request the batch modification to validate; must not be {@code null}.
+     * @return a structured result describing whether the modified content is
+     *         syntactically valid.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     */
+    public ValidationResult validateAllLanguage(BatchModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.filePath());
+        log.debug("validateAllLanguage batch for file: {} ({} replacements)",
+                path, request.replacements().size());
+
+        Optional<Language> language = Language.fromPath(path);
+        if (language.isEmpty()) {
+            log.warn("Unsupported file extension: {}", path);
+            return ValidationResult.invalid(
+                    "Unable to detect a supported language from the file extension: " + path);
+        }
+
+        return switch (language.get()) {
+            case HTML, PHP -> {
+                log.debug("Routing to mixed-content validation for {}", language.get());
+                yield validateMixedContent(request);
+            }
+            default -> {
+                log.debug("Routing to language-specific validation for {}", language.get());
+                yield validate(request);
+            }
+        };
+    }
     /**
      * Forces the cached content for the given file to be discarded so that the
      * next {@link #validate(ModificationRequest)} reloads it from disk.

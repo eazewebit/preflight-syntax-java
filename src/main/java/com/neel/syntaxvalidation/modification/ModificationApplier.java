@@ -1,6 +1,9 @@
 package com.neel.syntaxvalidation.modification;
 
+import com.neel.syntaxvalidation.model.LineReplacement;
+
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
@@ -61,5 +64,41 @@ public class ModificationApplier {
         }
 
         return List.copyOf(result);
+    }
+
+    /**
+     * Applies multiple line-range replacements to the given source lines, returning
+     * the fully modified result. Replacements are applied in reverse order (bottom-to-top)
+     * to preserve line numbers for subsequent replacements.
+     *
+     * <p>Each {@link LineReplacement} is applied using the single-replacement
+     * {@link #apply(List, int, int, String)} method. The replacements are sorted by
+     * {@code fromLine} in descending order before application so that earlier line
+     * numbers remain stable.
+     *
+     * @param originalLines the original file lines (without terminators); must not be {@code null}.
+     * @param replacements  the list of replacements to apply; must not be {@code null} or empty.
+     * @return a new, unmodifiable list of lines after all modifications.
+     * @throws IllegalArgumentException if any replacement has invalid bounds
+     */
+    public List<String> applyAll(List<String> originalLines, List<LineReplacement> replacements) {
+        Objects.requireNonNull(originalLines, "originalLines");
+        Objects.requireNonNull(replacements, "replacements");
+        if (replacements.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "replacements must not be empty; at least one LineReplacement is required");
+        }
+
+        // Sort by fromLine descending so we apply from bottom to top,
+        // preserving earlier line numbers.
+        List<LineReplacement> sorted = new ArrayList<>(replacements);
+        sorted.sort(Comparator.comparingInt(LineReplacement::fromLine).reversed());
+
+        List<String> current = new ArrayList<>(originalLines);
+        for (LineReplacement r : sorted) {
+            current = new ArrayList<>(apply(current, r.fromLine(), r.toLine(), r.replacement()));
+        }
+
+        return List.copyOf(current);
     }
 }

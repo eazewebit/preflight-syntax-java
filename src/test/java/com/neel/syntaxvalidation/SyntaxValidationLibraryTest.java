@@ -1,13 +1,16 @@
 package com.neel.syntaxvalidation;
 
 import com.neel.syntaxvalidation.binary.BinaryResolver;
+import com.neel.syntaxvalidation.model.BatchModificationRequest;
 import com.neel.syntaxvalidation.model.Language;
+import com.neel.syntaxvalidation.model.LineReplacement;
 import com.neel.syntaxvalidation.model.ModificationRequest;
 import com.neel.syntaxvalidation.model.ValidationResult;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
 import com.neel.syntaxvalidation.validator.ValidatorFactory;
 import com.neel.syntaxvalidation.validator.javascript.JavaScriptValidator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -126,7 +129,7 @@ class SyntaxValidationLibraryTest {
     void validate_rejectsNullRequest() {
         SyntaxValidationLibrary library = new SyntaxValidationLibrary();
 
-        assertThatThrownBy(() -> library.validate(null))
+        assertThatThrownBy(() -> library.validate((ModificationRequest) null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -605,9 +608,155 @@ class SyntaxValidationLibraryTest {
         String lastValidatedContent() {
             return lastContent;
         }
-
         int validateCount() {
             return count;
         }
+    }
+
+    // ---- batch validation tests -----------------------------------------
+
+    @Test
+    void validate_batch_returnsInvalidForMissingFile() {
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("x").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(tempDir.resolve("missing.js").toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validate(batch);
+
+        assertThat(result.isValid()).isFalse();
+        assertThat(result.getMessage()).contains("does not exist");
+    }
+
+    @Test
+    void validate_batch_rejectsNullRequest() {
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        assertThatThrownBy(() -> library.validate((BatchModificationRequest) null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void validate_batch_appliesReplacementsAndValidates() throws IOException {
+        Path file = writeFile("app.js", "const a = 1;\nconst b = 2;\nconst c = 3;\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(2).toLine(2).replacement("const b = 99;")
+                .build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validate(batch);
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void validate_batch_multipleReplacements() throws IOException {
+        Path file = writeFile("app.js", "const a = 1;\nconst b = 2;\nconst c = 3;\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r1 = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("const x = 10;").build();
+        LineReplacement r2 = LineReplacement.builder()
+                .fromLine(3).toLine(3).replacement("const z = 30;").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r1)
+                .addReplacement(r2)
+                .build();
+
+        ValidationResult result = library.validate(batch);
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void validate_batch_invalidReplacementReportsError() throws IOException {
+        Path file = writeFile("app.js", "const a = 1;\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("const b = ;").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validate(batch);
+
+        assertThat(result.isValid()).isFalse();
+        assertThat(result.getErrors()).isNotEmpty();
+    }
+
+    @Test
+    void validate_batch_usesCachedFileContent() throws IOException {
+        Path file = writeFile("app.js", "const a = 1;\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        // First: single request (caches file)
+        library.validate(request(file, 1, 1, "const b = 2;"));
+
+        // Second: batch request (should use cached content from original file)
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("const c = 3;").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validate(batch);
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void validateAllLanguage_batch_delegatesToCorrectValidator() throws IOException {
+        Path file = writeFile("app.js", "const a = 1;\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("const b = 2;").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validateAllLanguage(batch);
+
+        assertThat(result.isValid()).isTrue();
+    }
+
+    @Test
+    void validateAllLanguage_batch_rejectsNullRequest() {
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        assertThatThrownBy(() -> library.validateAllLanguage((BatchModificationRequest) null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void validateAllLanguage_batch_unsupportedExtension() throws IOException {
+        Path file = writeFile("data.xyz", "content\n");
+        SyntaxValidationLibrary library = new SyntaxValidationLibrary();
+
+        LineReplacement r = LineReplacement.builder()
+                .fromLine(1).toLine(1).replacement("new content").build();
+        BatchModificationRequest batch = BatchModificationRequest.builder()
+                .filePath(file.toString())
+                .addReplacement(r)
+                .build();
+
+        ValidationResult result = library.validateAllLanguage(batch);
+
+        assertThat(result.isValid()).isFalse();
+        assertThat(result.getMessage()).contains("extension");
     }
 }
