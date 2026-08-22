@@ -444,6 +444,167 @@ public class SyntaxValidationLibrary {
             }
         };
     }
+
+    // ====================================================================
+    //  Modified content retrieval methods
+    // ====================================================================
+
+    /**
+     * Applies the proposed modification to an in-memory copy of the file and
+     * returns the resulting content as a string, without writing to disk.
+     *
+     * <p>This method is useful when you want to retrieve the modified file
+     * content after validation, or when you need the modified content for
+     * further processing (e.g., writing to a different location, passing to
+     * other tools).
+     *
+     * @param request the modification to apply; must not be {@code null}.
+     * @return the modified file content as a string.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     * @throws IllegalStateException if the file cannot be read
+     */
+    public String getModifiedContent(ModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.getFilePath());
+        log.debug("Getting modified content for file: {}", path);
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            throw new IllegalStateException("File does not exist: " + path, e);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
+        }
+
+        List<String> modifiedLines = modificationApplier.apply(
+                entry.getLines(),
+                request.getFromLine(),
+                request.getToLine(),
+                request.getReplacement());
+
+        return String.join("\n", modifiedLines);
+    }
+
+    /**
+     * Applies all proposed batch modifications to an in-memory copy of the file
+     * and returns the resulting content as a string, without writing to disk.
+     *
+     * <p>Replacements are applied in reverse line order to preserve line numbers
+     * for subsequent replacements.
+     *
+     * @param request the batch modification to apply; must not be {@code null}.
+     * @return the modified file content as a string.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     * @throws IllegalStateException if the file cannot be read
+     */
+    public String getModifiedContent(BatchModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.filePath());
+        log.debug("Getting modified content for batch file: {} ({} replacements)",
+                path, request.replacements().size());
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            throw new IllegalStateException("File does not exist: " + path, e);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
+        }
+
+        List<String> modifiedLines = modificationApplier.applyAll(
+                entry.getLines(),
+                request.replacements());
+
+        return String.join("\n", modifiedLines);
+    }
+
+    /**
+     * Applies the proposed modification to an in-memory copy of the file and
+     * returns the resulting content as a list of lines, without writing to disk.
+     *
+     * <p>This method is useful when you need line-by-line access to the modified
+     * content, for example for diff generation or line-specific processing.
+     *
+     * @param request the modification to apply; must not be {@code null}.
+     * @return the modified file content as an unmodifiable list of lines.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     * @throws IllegalStateException if the file cannot be read
+     */
+    public List<String> getModifiedLines(ModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.getFilePath());
+        log.debug("Getting modified lines for file: {}", path);
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            throw new IllegalStateException("File does not exist: " + path, e);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
+        }
+
+        return modificationApplier.apply(
+                entry.getLines(),
+                request.getFromLine(),
+                request.getToLine(),
+                request.getReplacement());
+    }
+
+    /**
+     * Applies all proposed batch modifications to an in-memory copy of the file
+     * and returns the resulting content as a list of lines, without writing to disk.
+     *
+     * <p>Replacements are applied in reverse line order to preserve line numbers
+     * for subsequent replacements.
+     *
+     * @param request the batch modification to apply; must not be {@code null}.
+     * @return the modified file content as an unmodifiable list of lines.
+     * @throws IllegalArgumentException if {@code request} is {@code null}
+     * @throws IllegalStateException if the file cannot be read
+     */
+    public List<String> getModifiedLines(BatchModificationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+
+        Path path = Path.of(request.filePath());
+        log.debug("Getting modified lines for batch file: {} ({} replacements)",
+                path, request.replacements().size());
+
+        FileCacheEntry entry;
+        try {
+            entry = fileCache.getOrLoad(path);
+        } catch (NoSuchFileException e) {
+            log.error("File not found: {}", path);
+            throw new IllegalStateException("File does not exist: " + path, e);
+        } catch (IOException e) {
+            log.error("Failed to read file '{}': {}", path, e.getMessage(), e);
+            throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
+        }
+
+        return modificationApplier.applyAll(
+                entry.getLines(),
+                request.replacements());
+    }
+
     /**
      * Forces the cached content for the given file to be discarded so that the
      * next {@link #validate(ModificationRequest)} reloads it from disk.
