@@ -1,0 +1,70 @@
+# ---------------------------------------------------------------------------
+# Line-ending policy (deterministic across machines).
+#
+# Git attributes always take precedence over core.autocrlf / core.eol, so this
+# file pins behaviour for every clone regardless of each developer's local
+# config. The repository stores LF for all text files; checkouts receive LF
+# except where a platform interpreter demands CRLF (Windows batch files).
+#
+# Rationale: with autocrlf=true and no attributes, a fresh Windows clone gets
+# CRLF source while CI/Linux gets LF, so any tool that writes bytes directly
+# (editors, code generators, this library) produces whole-file diffs that look
+# like "it changed lines I did not touch".
+# ---------------------------------------------------------------------------
+
+# Default for everything unlisted: sniff content, store LF in the repo,
+# materialise LF on checkout. Content-detected binaries are left untouched.
+* text=auto eol=lf
+
+# --- Source, build and docs: LF in repo and on disk -------------------------
+*.java        text eol=lf
+*.gradle      text eol=lf
+*.properties  text eol=lf
+*.json        text eol=lf
+*.md          text eol=lf
+*.xml         text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+*.txt         text eol=lf
+*.js          text eol=lf
+*.ts          text eol=lf
+*.py          text eol=lf
+*.php         text eol=lf
+*.css         text eol=lf
+*.html        text eol=lf
+*.backup      text eol=lf
+
+# --- POSIX scripts: CRLF breaks shebangs and shell parsing ------------------
+*.sh            text eol=lf
+*.bash          text eol=lf
+gradlew         text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+
+# --- Windows batch: cmd.exe needs CRLF on disk (repo still stores LF) -------
+*.bat         text eol=crlf
+*.cmd         text eol=crlf
+
+# --- Binary: never apply EOL or encoding conversion -------------------------
+*.jar     binary
+*.war     binary
+*.class   binary
+*.zip     binary
+*.gz      binary
+*.tgz     binary
+*.bz2     binary
+*.7z      binary
+*.exe     binary
+*.dll     binary
+*.so      binary
+*.dylib   binary
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.pdf     binary

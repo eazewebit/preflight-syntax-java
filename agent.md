@@ -99,3 +99,16 @@ that names the path and offset.
 - Editor file-tool relative paths resolve against the editor install dir (`C:\Program Files\EazeEditor`),
   NOT this project root. Always pass absolute `F:\code-helper-mcp-library-java\...` paths to
   read/write/search tools; shell sessions also start outside the repo — `Set-Location` first.
+
+### Line-Ending Policy (repo-level, `.gitattributes`)
+
+- The repo stores **LF** for every text file and checkouts emit LF. `*.bat` / `*.cmd` are
+  `text eol=crlf` because `cmd.exe` needs CRLF on disk; known binary extensions (including
+  `gradle/wrapper/gradle-wrapper.jar`) are marked `binary`, so their bytes are never converted.
+- `.gitattributes` takes precedence over `core.autocrlf`, so endings no longer depend on any
+  clone's local config. Do not reintroduce autocrlf-driven behaviour in tooling or scripts.
+- Scope: this policy governs *repo sources* only. The library still preserves whatever ending a
+  *user* file uses (byte-faithful edit pipeline above); the two concerns are independent.
+- Verify with `git ls-files --eol` (expect `i/lf w/lf`, plus `w/crlf` for `.bat`) and
+  `git check-attr text eol -- <path>`. A whole-file diff in a future commit means an EOL rule was
+  bypassed: write with explicit UTF-8 + LF rather than relying on tool defaults.
