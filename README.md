@@ -192,8 +192,8 @@ modifiedLines.forEach(System.out::println);
 ValidationResult result = library.validate(request);
 if (result.isValid()) {
     String safeContent = library.getModifiedContent(request);
-    // Write to file or pass to another tool
-    Files.writeString(Path.of("output.java"), safeContent);
+    // Persist losslessly (strict UTF-8 + atomic replace) instead of Files.writeString.
+    library.getFileWriter().write(Path.of("output.java"), safeContent);
 }
 ```
 
@@ -238,8 +238,8 @@ List<String> modifiedLines = library.getModifiedLines(batchRequest);
 // Validate and retrieve
 ValidationResult result = library.validate(batchRequest);
 if (result.isValid()) {
-    // Apply the modification
-    Files.writeString(Path.of(batchRequest.filePath()), modifiedContent);
+    // Land the batch edit: strict UTF-8 + atomic replace, cache entry refreshed.
+    library.applyBatchModification(batchRequest);
 }
 ```
 
@@ -278,16 +278,13 @@ public class CodeModifier {
             return false;
         }
         
-        // Get the modified content
-        String modifiedContent = library.getModifiedContent(request);
-        
-        // Write to file
-        Path path = Path.of(filePath);
-        Files.writeString(path, modifiedContent);
-        
-        // Invalidate cache for this file
-        library.invalidateCache(path);
-        
+        // Land the edit atomically as strict UTF-8: line endings outside the edited range,
+        // the trailing-newline state and a leading BOM are all preserved, and the cache
+        // entry is refreshed automatically.
+        var written = library.applyModification(request);
+
+        System.out.printf("Wrote %s (%d bytes, %d lines)%n",
+                written.path(), written.bytesWritten(), written.lineCount());
         return true;
     }
     
@@ -310,14 +307,50 @@ public class CodeModifier {
             return false;
         }
         
-        String modifiedContent = library.getModifiedContent(request);
-        Files.writeString(Path.of(filePath), modifiedContent);
-        library.invalidateCache(Path.of(filePath));
+        var written = library.applyBatchModification(request);   // strict UTF-8 + atomic replace
         
         return true;
     }
 }
 ```
+
+## Byte fidelity, encoding and atomic writes
+
+Everything the library renders or writes preserves the original file's byte layout outside
+the edited line range. This is enforced by `modification/Document` (every line carries its
+own terminator plus a leading-BOM flag) instead of splitting and rejoining text with one
+"dominant" separator, which used to rewrite bytes nobody had touched.
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Mixed endings (a lone `\n` inside a CRLF file) | Untouched lines keep their own terminator, byte for byte |
+| CR-only ("classic Mac") files | Stay CR-only; never converted to LF |
+| Missing trailing newline | Stays absent after an edit; inserted text inherits the boundary terminator |
+| Inserted lines | Use the document's dominant separator |
+| UTF-8 BOM | Stripped from line&nbsp;1 for content and language detection, re-emitted verbatim on render/write |
+| Non-UTF-8 file | Read fails loudly with `UnsupportedFileEncodingException` (path + byte offset); never a lossy decode |
+| Unmappable text (unpaired surrogate) | Write refused with `UnmappableTextException`; the target file is left untouched |
+
+**Persisting an edit.** Prefer the built-in writer over `Files.writeString`, which opens the
+target with `TRUNCATE_EXISTING` (a crash or encoder failure halfway through leaves a
+half-written original behind) and silently replaces unmappable characters with `?`:
+
+```java
+// Validate first, then land the edit as strict UTF-8, atomically.
+if (library.validate(request).isValid()) {
+    var written = library.applyModification(request);              // single replacement
+    System.out.printf("%s: %d bytes, %d lines%n",
+            written.path(), written.bytesWritten(), written.lineCount());
+}
+
+var writtenBatch = library.applyBatchModification(batchRequest);   // batch replacements
+
+// Or persist arbitrary text with the same guarantees:
+library.getFileWriter().write(Path.of("out.js"), content);
+```
+
+Both `apply*` methods invalidate the cache entry for the path, so a following read sees the
+new bytes even when the write lands within the same clock tick as the cached timestamp.
 
 ## Binary resolution strategy
 

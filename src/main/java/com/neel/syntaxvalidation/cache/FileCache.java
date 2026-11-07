@@ -1,10 +1,15 @@
 package com.neel.syntaxvalidation.cache;
 
+import com.neel.syntaxvalidation.io.UnsupportedFileEncodingException;
+import com.neel.syntaxvalidation.modification.Document;
+
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,21 +17,27 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Thread-safe, in-memory cache of file contents with optional LRU eviction.
  *
- * <p>The cache keeps a {@link FileCacheEntry} per file keyed by its absolute
- * path. On {@link #getOrLoad(Path)} it returns the cached entry, automatically
- * reloading the file when its last-modified timestamp on disk has advanced past
- * the value recorded in the cache. This guarantees that validation always runs
- * against a fresh copy while still avoiding redundant disk reads for unchanged
- * files.
+ * <p>The cache keeps a {@link FileCacheEntry} per file keyed by its absolute path. On
+ * {@link #getOrLoad(Path)} it returns the cached entry, automatically reloading the file
+ * when its last-modified timestamp on disk has advanced past the recorded value or its
+ * size no longer matches. Size is part of the staleness test because a write that lands
+ * in the same clock tick as the cached timestamp would otherwise be missed, leaving an
+ * editor validating (and then editing) stale content.
  *
  * <p>When constructed with a maximum size, the cache uses LRU (Least Recently Used)
- * eviction to prevent unbounded memory growth in long-running applications. When
- * the maximum size is reached, the least recently accessed entry is removed before
- * adding a new one.
+ * eviction to prevent unbounded memory growth in long-running applications.
  *
- * <p>The cache never writes to disk &mdash; it only reads. Modifications are
- * applied to in-memory copies produced by the {@code ModificationApplier}, so
- * the original file on disk is left untouched.
+ * <p><b>The cache never writes to disk &mdash; it only reads.</b> Modifications are applied
+ * to the in-memory {@link Document} produced by the {@code ModificationApplier}, so the
+ * original file is left untouched until a caller explicitly persists it (see
+ * {@code com.neel.syntaxvalidation.io.SourceFileWriter}).
+ *
+ * <p><b>Encoding contract.</b> Files are decoded strictly as UTF-8: no lossy fallback and
+ * no silent replacement characters. A byte sequence that is not valid UTF-8 fails loudly
+ * with {@link UnsupportedFileEncodingException}, naming the path and byte offset, because
+ * a lossy read would make the next write rewrite bytes nobody asked to change. A leading
+ * UTF-8 BOM is stripped from line&nbsp;1 (so language detection and first-line content stay
+ * clean) and recorded on the entry so it can be re-emitted verbatim on write.
  */
 public class FileCache {
 
@@ -56,22 +67,25 @@ public class FileCache {
     }
 
     /**
-     * Returns the cached entry for the given path, reloading it from disk if the
-     * file is new or has been modified since it was cached.
+     * Returns the cached entry for the given path, reloading it from disk if the file is
+     * new, has been modified since it was cached, or no longer matches its cached size.
      *
      * @param path the file path; must not be {@code null}.
      * @return a fresh or cached {@link FileCacheEntry}.
-     * @throws IOException if the file cannot be read.
+     * @throws UnsupportedFileEncodingException if the file is not valid UTF-8.
+     * @throws IOException                      if the file cannot be read.
      */
     public FileCacheEntry getOrLoad(Path path) throws IOException {
         String key = toKey(path);
         long currentModified = Files.getLastModifiedTime(path).toMillis();
+        long currentSize = Files.size(path);
+
         FileCacheEntry existing = cache.get(key);
-        if (existing != null && existing.getLastModified() == currentModified) {
+        if (existing != null && isFresh(existing, currentModified, currentSize)) {
             existing.touch();
             return existing;
         }
-        FileCacheEntry entry = loadEntry(path, currentModified);
+        FileCacheEntry entry = loadEntry(path, currentModified, currentSize);
         putEntry(key, entry);
         return entry;
     }
@@ -99,7 +113,8 @@ public class FileCache {
     }
 
     /**
-     * Forces the next {@link #getOrLoad(Path)} to reload the file from disk.
+     * Forces the next {@link #getOrLoad(Path)} to reload the file from disk. Call this after
+     * writing a cached file so subsequent reads observe the new bytes immediately.
      *
      * @param path the file path.
      * @return {@code true} if a cached entry was actually removed.
@@ -123,6 +138,19 @@ public class FileCache {
         return maxSize;
     }
 
+    // ==================================================================
+    //  Internals
+    // ==================================================================
+
+    private static boolean isFresh(FileCacheEntry entry, long currentModified, long currentSize) {
+        if (entry.getLastModified() != currentModified) {
+            return false;
+        }
+        // Size guards against a same-timestamp rewrite (coarse filesystem clocks).
+        return entry.getSizeBytes() == FileCacheEntry.UNKNOWN_SIZE
+                || entry.getSizeBytes() == currentSize;
+    }
+
     private void putEntry(String key, FileCacheEntry entry) {
         if (maxSize > 0 && cache.size() >= maxSize) {
             evictLRU();
@@ -138,10 +166,10 @@ public class FileCache {
         if (cache.isEmpty()) {
             return;
         }
-        
+
         String oldestKey = null;
         long oldestAccess = Long.MAX_VALUE;
-        
+
         for (Map.Entry<String, FileCacheEntry> e : cache.entrySet()) {
             long accessTime = e.getValue().getLastAccessed();
             if (accessTime < oldestAccess) {
@@ -149,19 +177,48 @@ public class FileCache {
                 oldestKey = e.getKey();
             }
         }
-        
+
         if (oldestKey != null) {
             cache.remove(oldestKey);
         }
     }
 
-    private FileCacheEntry loadEntry(Path path, long lastModified) throws IOException {
-        List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+    private FileCacheEntry loadEntry(Path path, long lastModified, long sizeBytes) throws IOException {
+        byte[] bytes = Files.readAllBytes(path);
+        String text = decodeUtf8Strict(bytes, path);
+        Document document = Document.parse(text);
         return new FileCacheEntry(
                 path.toAbsolutePath().toString(),
-                lines,
+                document,
                 lastModified,
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                sizeBytes);
+    }
+
+    /**
+     * Decodes bytes as UTF-8 with no lossy substitution.
+     *
+     * <p>A leading BOM is left in the decoded text (it becomes {@code U+FEFF}) so that
+     * {@link Document#parse(String)} can record it as a flag; every other invalid sequence
+     * aborts the read with an {@link UnsupportedFileEncodingException} carrying the byte
+     * offset at which decoding stopped.
+     *
+     * @param bytes the raw file bytes.
+     * @param path  the file path, used for diagnostics only.
+     * @return the decoded text.
+     * @throws UnsupportedFileEncodingException if the bytes are not valid UTF-8.
+     */
+    private static String decodeUtf8Strict(byte[] bytes, Path path) throws IOException {
+        java.nio.charset.CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT);
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        try {
+            return decoder.decode(buffer).toString();
+        } catch (CharacterCodingException e) {
+            throw new UnsupportedFileEncodingException(
+                    path.toAbsolutePath().toString(), buffer.position(), e);
+        }
     }
 
     private static String toKey(Path path) {

@@ -69,17 +69,46 @@ class ModificationApplierTest {
     }
 
     @Test
-    void apply_fromLineBeyondEnd_appendsReplacement() {
-        List<String> result = applier.apply(ORIGINAL, 10, 12, "APPENDED");
+    void apply_fromLineBeyondEnd_throwsInsteadOfAppending() {
+        // Regression: a fully out-of-bounds fromLine used to silently append the
+        // replacement as a new trailing line and report success. It must now fail
+        // loudly so hallucinated/stale line numbers cannot corrupt files unnoticed.
+        assertThatThrownBy(() -> applier.apply(ORIGINAL, 10, 12, "APPENDED"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of bounds")
+                .hasMessageContaining("5");
 
-        assertThat(result).containsExactly("1", "2", "3", "4", "5", "APPENDED");
+        // The exact audit scenario: replacing line 99 on a short file must error.
+        assertThatThrownBy(() -> applier.apply(ORIGINAL, 99, 99, "X"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of bounds");
+    }
+
+    @Test
+    void apply_fromLineJustPastLastLine_throws() {
+        // fromLine == size is valid (replaces last line); fromLine == size + 1 is not.
+        assertThat(applier.apply(ORIGINAL, 5, 5, "END"))
+                .containsExactly("1", "2", "3", "4", "END");
+
+        assertThatThrownBy(() -> applier.apply(ORIGINAL, 6, 6, "X"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of bounds");
     }
 
     @Test
     void apply_toLineBeyondEnd_truncatesTail() {
+        // toLine past EOF remains a graceful clamp (only fully-out-of-bounds fromLine errors).
         List<String> result = applier.apply(ORIGINAL, 3, 100, "X");
 
         assertThat(result).containsExactly("1", "2", "X");
+    }
+
+    @Test
+    void apply_emptyFileRejectsAnyReplacement() {
+        // An empty file has no lines to target; refusing avoids silent append.
+        assertThatThrownBy(() -> applier.apply(List.of(), 1, 1, "X"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of bounds");
     }
 
     @Test
@@ -216,6 +245,18 @@ class ModificationApplierTest {
         // After r2 (line 4 deleted): ["1", "2", "3", "5"]
         // After r1 (line 2 deleted): ["1", "3", "5"]
         assertThat(result).containsExactly("1", "3", "5");
+    }
+
+    @Test
+    void applyAll_outOfBoundsReplacementThrows() {
+        LineReplacement valid = LineReplacement.builder()
+                .fromLine(2).toLine(2).replacement("X").build();
+        LineReplacement outOfBounds = LineReplacement.builder()
+                .fromLine(99).toLine(99).replacement("GHOST").build();
+
+        assertThatThrownBy(() -> applier.applyAll(ORIGINAL, List.of(valid, outOfBounds)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("out of bounds");
     }
 
     @Test

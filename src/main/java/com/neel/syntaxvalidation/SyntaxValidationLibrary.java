@@ -3,11 +3,14 @@ package com.neel.syntaxvalidation;
 import com.neel.syntaxvalidation.binary.manager.BinaryManager;
 import com.neel.syntaxvalidation.cache.FileCache;
 import com.neel.syntaxvalidation.cache.FileCacheEntry;
+import com.neel.syntaxvalidation.io.SourceFileWriter;
+import com.neel.syntaxvalidation.io.WriteResult;
 import com.neel.syntaxvalidation.model.BatchModificationRequest;
 import com.neel.syntaxvalidation.model.Language;
 import com.neel.syntaxvalidation.model.LineReplacement;
 import com.neel.syntaxvalidation.model.ModificationRequest;
 import com.neel.syntaxvalidation.model.ValidationResult;
+import com.neel.syntaxvalidation.modification.Document;
 import com.neel.syntaxvalidation.modification.ModificationApplier;
 import com.neel.syntaxvalidation.validator.LanguageValidator;
 import com.neel.syntaxvalidation.validator.ValidatorFactory;
@@ -63,6 +66,7 @@ public class SyntaxValidationLibrary {
     private final FileCache fileCache;
     private final ValidatorFactory validatorFactory;
     private final ModificationApplier modificationApplier;
+    private final SourceFileWriter fileWriter = new SourceFileWriter();
     private final BinaryManager binaryManager;
 
     /**
@@ -201,13 +205,13 @@ public class SyntaxValidationLibrary {
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 
-        List<String> modifiedLines = modificationApplier.apply(
-                entry.getLines(),
+        Document modified = modificationApplier.applyToDocument(
+                entry.getDocument(),
                 request.getFromLine(),
                 request.getToLine(),
                 request.getReplacement());
 
-        String modifiedContent = String.join("\n", modifiedLines);
+        String modifiedContent = modified.renderWithoutBom();
         String fileName = path.getFileName().toString();
         ValidationResult result = validator.get().validate(modifiedContent, fileName);
         log.debug("Validation result for {}: valid={}", path, result.isValid());
@@ -262,13 +266,13 @@ public class SyntaxValidationLibrary {
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 
-        List<String> modifiedLines = modificationApplier.apply(
-                entry.getLines(),
+        Document modified = modificationApplier.applyToDocument(
+                entry.getDocument(),
                 request.getFromLine(),
                 request.getToLine(),
                 request.getReplacement());
 
-        String modifiedContent = String.join("\n", modifiedLines);
+        String modifiedContent = modified.renderWithoutBom();
         return validateMixedContent(modifiedContent);
     }
 
@@ -356,11 +360,11 @@ public class SyntaxValidationLibrary {
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 
-        List<String> modifiedLines = modificationApplier.applyAll(
-                entry.getLines(),
+        Document modified = modificationApplier.applyAllToDocument(
+                entry.getDocument(),
                 request.replacements());
 
-        String modifiedContent = String.join("\n", modifiedLines);
+        String modifiedContent = modified.renderWithoutBom();
         String fileName = path.getFileName().toString();
         ValidationResult result = validator.get().validate(modifiedContent, fileName);
         log.debug("Batch validation result for {}: valid={}", path, result.isValid());
@@ -399,11 +403,11 @@ public class SyntaxValidationLibrary {
             return ValidationResult.invalid("Failed to read file '" + path + "': " + e.getMessage());
         }
 
-        List<String> modifiedLines = modificationApplier.applyAll(
-                entry.getLines(),
+        Document modified = modificationApplier.applyAllToDocument(
+                entry.getDocument(),
                 request.replacements());
 
-        String modifiedContent = String.join("\n", modifiedLines);
+        String modifiedContent = modified.renderWithoutBom();
         return validateMixedContent(modifiedContent);
     }
 
@@ -482,13 +486,13 @@ public class SyntaxValidationLibrary {
             throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
         }
 
-        List<String> modifiedLines = modificationApplier.apply(
-                entry.getLines(),
+        Document modified = modificationApplier.applyToDocument(
+                entry.getDocument(),
                 request.getFromLine(),
                 request.getToLine(),
                 request.getReplacement());
 
-        return String.join("\n", modifiedLines);
+        return modified.render();
     }
 
     /**
@@ -523,11 +527,11 @@ public class SyntaxValidationLibrary {
             throw new IllegalStateException("Failed to read file '" + path + "': " + e.getMessage(), e);
         }
 
-        List<String> modifiedLines = modificationApplier.applyAll(
-                entry.getLines(),
+        Document modified = modificationApplier.applyAllToDocument(
+                entry.getDocument(),
                 request.replacements());
 
-        return String.join("\n", modifiedLines);
+        return modified.render();
     }
 
     /**
@@ -603,6 +607,81 @@ public class SyntaxValidationLibrary {
         return modificationApplier.applyAll(
                 entry.getLines(),
                 request.replacements());
+    }
+
+    // ====================================================================
+    //  On-disk application (strict UTF-8, atomic replace)
+    // ====================================================================
+
+    /**
+     * Applies a single modification and persists the result to disk atomically.
+     *
+     * <p>No validation is performed here: call {@link #validate(ModificationRequest)} first
+     * when the modified content must be checked before it lands. The write itself is strict
+     * UTF-8 and atomic &mdash; line terminators outside the edited range, the trailing-newline
+     * state and a leading BOM are preserved byte-for-byte, and any failure leaves the original
+     * file untouched. The cache entry for the path is invalidated afterwards so that a later
+     * read observes the new bytes even when the write lands in the same clock tick.
+     *
+     * @param request the modification to apply; must not be {@code null}.
+     * @return what was written: absolute path, byte count and line count.
+     * @throws IllegalArgumentException if {@code request} is {@code null} or its range is invalid
+     * @throws IOException if the file cannot be read (including a non-UTF-8 file) or written
+     */
+    public WriteResult applyModification(ModificationRequest request) throws IOException {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+        Path path = Path.of(request.getFilePath());
+        log.debug("Applying modification to disk: {} (lines {}-{})",
+                path, request.getFromLine(), request.getToLine());
+
+        FileCacheEntry entry = fileCache.getOrLoad(path);
+        Document modified = modificationApplier.applyToDocument(
+                entry.getDocument(),
+                request.getFromLine(),
+                request.getToLine(),
+                request.getReplacement());
+
+        WriteResult result = fileWriter.writeDocument(path, modified);
+        fileCache.invalidate(path);
+        log.debug("Applied modification to {} ({} bytes, {} lines)",
+                result.path(), result.bytesWritten(), result.lineCount());
+        return result;
+    }
+
+    /**
+     * Applies every replacement of a batch and persists the result to disk atomically,
+     * with the same fidelity guarantees as {@link #applyModification(ModificationRequest)}.
+     *
+     * @param request the batch modification to apply; must not be {@code null}.
+     * @return what was written: absolute path, byte count and line count.
+     * @throws IllegalArgumentException if {@code request} is {@code null} or a range is invalid
+     * @throws IOException if the file cannot be read (including a non-UTF-8 file) or written
+     */
+    public WriteResult applyBatchModification(BatchModificationRequest request) throws IOException {
+        if (request == null) {
+            throw new IllegalArgumentException("request must not be null");
+        }
+        Path path = Path.of(request.filePath());
+        log.debug("Applying batch modification to disk: {} ({} replacements)",
+                path, request.replacements().size());
+
+        FileCacheEntry entry = fileCache.getOrLoad(path);
+        Document modified = modificationApplier.applyAllToDocument(
+                entry.getDocument(),
+                request.replacements());
+
+        WriteResult result = fileWriter.writeDocument(path, modified);
+        fileCache.invalidate(path);
+        log.debug("Applied batch modification to {} ({} bytes, {} lines)",
+                result.path(), result.bytesWritten(), result.lineCount());
+        return result;
+    }
+
+    /** @return the strict-UTF-8 atomic writer used for on-disk application. */
+    public SourceFileWriter getFileWriter() {
+        return fileWriter;
     }
 
     /**
